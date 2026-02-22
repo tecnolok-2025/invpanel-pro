@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Alertas{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2 style="margin:0 0 6px;">Alertas</h2>
+  <div class="muted">Acá aparecen las recomendaciones abiertas del sistema (oportunidades / señales) para que las revises y las marques como aceptadas o ignoradas.</div>
+</div>
+
+{% if not recs %}
+  <div class="card">
+    <div class="success">No hay alertas pendientes 🎉</div>
+    <div class="muted">Cuando el sistema genere nuevas recomendaciones, vas a ver un numerito rojo en <b>Alertas</b> (arriba y en la barra inferior del celular).</div>
+  </div>
+{% else %}
+  {% for r in recs %}
+    <div class="card">
+      <div style="display:flex; gap:10px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap;">
+        <div style="min-width:220px; flex:1 1 360px;">
+          <div style="font-weight:700; font-size:16px;">{{ r.title }}</div>
+          <div class="muted" style="font-size:13px; margin-top:2px;">
+            Portafolio: <b>{{ r.portfolio.name }}</b> · {{ r.created_at|date:"d/m/Y H:i" }}
+          </div>
+          {% if r.body %}
+            <div style="margin-top:8px; white-space:pre-wrap;">{{ r.body }}</div>
+          {% endif %}
+          {% if r.payload %}
+            <details style="margin-top:8px;">
+              <summary class="muted">Ver detalles técnicos</summary>
+              <pre style="margin-top:8px;">{{ r.payload }}</pre>
+            </details>
+          {% endif %}
+        </div>
+
+        <div style="flex:0 0 280px; min-width:260px;">
+          <form method="post" style="display:flex; flex-direction:column; gap:8px;">
+            {% csrf_token %}
+            <input type="hidden" name="rid" value="{{ r.id }}">
+            <label class="muted" for="note-{{ r.id }}">Nota (opcional)</label>
+            <textarea id="note-{{ r.id }}" name="note" rows="3" placeholder="Ej: lo reviso mañana / me interesa por..."></textarea>
+
+            <div style="display:flex; gap:8px;">
+              <button class="btn" name="action" value="accept" type="submit" style="flex:1 1 0;">Aceptar</button>
+              <button class="btn btn-secondary" name="action" value="ignore" type="submit" style="flex:1 1 0;">Ignorar</button>
+            </div>
+          </form>
+
+          <div class="muted" style="margin-top:10px; font-size:12px;">
+            * Aceptar / Ignorar solo cambia el estado de la recomendación. No ejecuta operaciones reales.
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <div class="card col">
+    <h2>Portafolios</h2>
+    {% if items %}
+      <table>
+        <tr><th>Nombre</th><th>Moneda base</th><th></th></tr>
+        {% for p in items %}
+        <tr>
+          <td>{{ p.name }}</td>
+          <td>{{ p.base_currency }}</td>
+          <td><a href="/portfolios/{{ p.id }}/">Abrir</a></td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Sin portafolios aún.</p>
+    {% endif %}
+  </div>
+
+  <div class="card col">
+    <h3>Crear portafolio</h3>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Crear</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

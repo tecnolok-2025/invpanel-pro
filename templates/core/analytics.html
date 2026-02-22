@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Análisis (PRO){% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Análisis (PRO) — Ranking estadístico (educativo)</h2>
+  <p class="muted">
+    Este módulo trabaja <strong>solo</strong> con datos históricos cargados por vos (CSV).<br>
+    <strong>No</strong> es asesoramiento financiero. Usalo para practicar criterio y disciplina.
+  </p>
+
+  <div style="margin: 12px 0;">
+    <form method="get" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <label>Ventana (días):</label>
+      <input type="number" name="window" value="{{ window }}" min="7" max="3650" />
+      <button class="btn" type="submit">Actualizar</button>
+      <a class="btn btn-secondary" href="/prices/upload/">Cargar precios (CSV)</a>
+    </form>
+  </div>
+
+  {% if ranked %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Activo</th>
+        <th>Desde</th>
+        <th>Hasta</th>
+        <th>N</th>
+        <th>Retorno</th>
+        <th>Vol (ann)</th>
+        <th>Sharpe</th>
+        <th>DD máx</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in ranked %}
+      <tr>
+        <td>{{ forloop.counter }}</td>
+        <td><strong>{{ m.asset.symbol }}</strong> {% if m.asset.name %}<span class="muted">— {{ m.asset.name }}</span>{% endif %}</td>
+        <td>{{ m.start }}</td>
+        <td>{{ m.end }}</td>
+        <td>{{ m.n }}</td>
+        <td>{{ m.period_return|floatformat:2 }}</td>
+        <td>{{ m.vol_ann|floatformat:2 }}</td>
+        <td>{{ m.sharpe|floatformat:2 }}</td>
+        <td>{{ m.max_drawdown|floatformat:2 }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="card" style="margin-top: 12px;">
+    <h3>Cómo leer el ranking</h3>
+    <ul>
+      <li><strong>Retorno</strong>: variación del precio en la ventana.</li>
+      <li><strong>Vol (ann)</strong>: volatilidad anualizada aproximada (más alto = más "movido").</li>
+      <li><strong>Sharpe</strong>: retorno/volatilidad (simple, rf=0). Más alto suele ser “mejor” riesgo/retorno, pero no garantiza nada.</li>
+      <li><strong>DD máx</strong>: peor caída desde un máximo en el período (más negativo = más dolor).</li>
+    </ul>
+  </div>
+
+  {% else %}
+    <div class="alert">
+      <strong>No hay datos históricos cargados.</strong> Para empezar, cargá un CSV en <a href="/prices/upload/">Cargar precios (CSV)</a>.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

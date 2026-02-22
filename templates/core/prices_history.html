@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Históricos de precios — InvPanel PRO{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:0;">Históricos de precios</h2>
+      <div class="muted">Tabla de verificación (máx. 1000 filas). Útil para confirmar que el CSV se cargó.</div>
+    </div>
+    <a class="btn" href="/analytics/">Volver a Análisis</a>
+  </div>
+
+  <form method="get" style="margin-top:14px; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px;">
+    <input name="symbol" value="{{ symbol }}" placeholder="Símbolo (ej. AAPL)" />
+    <input type="date" name="from" value="{{ date_from }}" />
+    <input type="date" name="to" value="{{ date_to }}" />
+    <div style="grid-column:1/-1; display:flex; gap:10px;">
+      <button class="btn btn-primary" type="submit">Filtrar</button>
+      <a class="btn" href="/prices/history/">Limpiar</a>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="overflow:auto;">
+  <table style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr style="text-align:left;">
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Fecha</th>
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Símbolo</th>
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Cierre</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td style="padding:10px; border-bottom:1px solid var(--border);" class="muted">{{ r.date|date:"Y-m-d" }}</td>
+        <td style="padding:10px; border-bottom:1px solid var(--border);"><b>{{ r.asset.symbol }}</b></td>
+        <td style="padding:10px; border-bottom:1px solid var(--border);">{{ r.close }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="3" style="padding:14px;" class="muted">No hay datos para esos filtros.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

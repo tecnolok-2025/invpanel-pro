@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Manual — InvPanel PRO{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:0;">Manual de operación</h2>
+      <div class="muted">Solo accesible con login.</div>
+    </div>
+    <a class="btn btn-primary" href="/manual/pdf/">Descargar PDF</a>
+  </div>
+</div>
+
+{% for title, bullets in sections %}
+  <div class="card">
+    <h3 style="margin-top:0;">{{ title }}</h3>
+    <ul style="margin:0; padding-left:18px;">
+      {% for b in bullets %}
+        <li style="margin:8px 0; line-height:1.45;">{{ b }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endfor %}
+
+{% endblock %}

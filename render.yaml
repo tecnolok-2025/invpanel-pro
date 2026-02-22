@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: invpanel-pro
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: bash ./build.sh
+    startCommand: python -m gunicorn invpanel.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DJANGO_SETTINGS_MODULE
+        value: invpanel.settings
+
+      # Seguridad / Dominio
+      - key: DEBUG
+        value: "0"
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+
+      # Admin inicial (bootstrap_admin)
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+
+      # Base persistente (recomendado)
+      - key: USE_POSTGRES
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+
+      # Alertas por mail
+      - key: INV_BASE_URL
+        sync: false
+      - key: ALERT_RUN_TOKEN
+        sync: false
+      - key: ALERT_EMAIL_TO
+        sync: false
+
+      # SMTP
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_USE_TLS
+        value: "1"
+      - key: DEFAULT_FROM_EMAIL
+        sync: false

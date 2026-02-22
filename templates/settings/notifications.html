@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Configuración · Notificaciones</h2>
+  <p class="muted">
+    Activá notificaciones en este dispositivo. En iPhone: instalá la app con <b>“Agregar a inicio”</b>
+    para que se comporte como app.
+  </p>
+
+  <button class="btn" id="btnEnable">Activar notificaciones</button>
+  <button class="btn btn-secondary" id="btnTest" style="margin-left:8px;">Probar notificación</button>
+
+  <pre id="status" style="margin-top:12px;"></pre>
+</div>
+
+<script>
+  const VAPID_PUBLIC_KEY = "{{ VAPID_PUBLIC_KEY|escapejs }}";
+
+  function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+  }
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map(char => char.charCodeAt(0)));
+  }
+
+  async function enablePush() {
+    const status = document.getElementById("status");
+
+    if (!("serviceWorker" in navigator)) {
+      status.textContent = "Service Worker no disponible en este navegador.";
+      return;
+    }
+    if (!("PushManager" in window)) {
+      status.textContent = "Push no disponible en este navegador.";
+      return;
+    }
+    if (!VAPID_PUBLIC_KEY) {
+      status.textContent = "Falta VAPID_PUBLIC_KEY (variable de entorno).";
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      status.textContent = "Permiso denegado. No se activaron notificaciones.";
+      return;
+    }
+
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+    });
+
+    const res = await fetch("/push/subscribe/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCookie("csrftoken")
+      },
+      body: JSON.stringify(sub.toJSON())
+    });
+
+    const data = await res.json();
+    status.textContent = data.ok ? "✅ Notificaciones activadas" : "❌ Error al activar";
+  }
+
+  async function testPush() {
+    const status = document.getElementById("status");
+    const res = await fetch("/push/test/", {
+      method: "POST",
+      headers: { "X-CSRFToken": getCookie("csrftoken") }
+    });
+    const data = await res.json();
+    status.textContent = data.ok ? `✅ Enviadas: ${data.sent}` : `❌ Error: ${data.error || "?"}`;
+  }
+
+  document.getElementById("btnEnable").addEventListener("click", enablePush);
+  document.getElementById("btnTest").addEventListener("click", testPush);
+</script>
+{% endblock %}

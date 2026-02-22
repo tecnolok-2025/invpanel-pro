@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Base de datos — Oportunidades{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:0;">Oportunidades — Base de datos</h2>
+      <div class="muted">Lista histórica (máx. 500 filas). Desde aquí podés “enviar al portafolio” (ACEPTAR) o IGNORAR.</div>
+    </div>
+    <a class="btn" href="/opportunities/">Volver al Inbox</a>
+  </div>
+
+  <form method="get" style="margin-top:14px; display:grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap:10px;">
+    <input name="q" value="{{ q }}" placeholder="Buscar por título o código" />
+    <select name="status">
+      <option value="">Estado (todos)</option>
+      <option value="OPEN" {% if status == 'OPEN' %}selected{% endif %}>OPEN</option>
+      <option value="ACCEPTED" {% if status == 'ACCEPTED' %}selected{% endif %}>ACCEPTED</option>
+      <option value="IGNORED" {% if status == 'IGNORED' %}selected{% endif %}>IGNORED</option>
+    </select>
+    <input type="date" name="from" value="{{ date_from }}" />
+    <input type="date" name="to" value="{{ date_to }}" />
+    <div style="grid-column:1/-1; display:flex; gap:10px;">
+      <button class="btn btn-primary" type="submit">Filtrar</button>
+      <a class="btn" href="/opportunities/db/">Limpiar</a>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="overflow:auto;">
+  <table style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr style="text-align:left;">
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Fecha</th>
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Oportunidad</th>
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Estado</th>
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Portafolio</th>
+        <th style="padding:10px; border-bottom:1px solid var(--border);">Acciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in items %}
+      <tr>
+        <td style="padding:10px; border-bottom:1px solid var(--border); white-space:nowrap;" class="muted">{{ r.created_at|date:"Y-m-d" }}</td>
+        <td style="padding:10px; border-bottom:1px solid var(--border);">
+          <div style="font-weight:900;">{{ r.title }}</div>
+          <div class="muted" style="font-size:12px;">{{ r.code }} · Severidad: {{ r.severity }}</div>
+          {% if r.decision_note %}<div class="muted" style="margin-top:6px;">Nota: {{ r.decision_note }}</div>{% endif %}
+        </td>
+        <td style="padding:10px; border-bottom:1px solid var(--border);"><b>{{ r.status }}</b></td>
+        <td style="padding:10px; border-bottom:1px solid var(--border);">{{ r.portfolio.name }}</td>
+        <td style="padding:10px; border-bottom:1px solid var(--border);">
+          <form method="post" style="display:flex; gap:8px; flex-wrap:wrap; margin:0;">
+            {% csrf_token %}
+            <input type="hidden" name="rid" value="{{ r.id }}" />
+            <input type="hidden" name="note" value="" />
+            <button class="btn btn-primary" type="submit" name="action" value="send">Enviar al portafolio</button>
+            <button class="btn" type="submit" name="action" value="ignore">Ignorar</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="5" style="padding:14px;" class="muted">No hay resultados con esos filtros.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

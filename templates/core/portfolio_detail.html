@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>{{ portfolio.name }}</h2>
+  <p class="muted">Moneda base: {{ portfolio.base_currency }} | Valor estimado (MVP): {{ snap.total }}</p>
+</div>
+
+<div class="row">
+  <div class="card col">
+    <h3>Movimientos (últimos 100)</h3>
+    {% if txs %}
+      <table>
+        <tr><th>Fecha</th><th>Activo</th><th>Tipo</th><th>Cant.</th><th>Precio</th><th>Fee</th></tr>
+        {% for t in txs %}
+        <tr>
+          <td>{{ t.tx_date }}</td>
+          <td>{{ t.asset.symbol }}</td>
+          <td>{{ t.tx_type }}</td>
+          <td>{{ t.quantity }}</td>
+          <td>{{ t.price }}</td>
+          <td>{{ t.fee }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Sin movimientos aún.</p>
+    {% endif %}
+  </div>
+
+  <div class="card col">
+    <h3>Agregar movimiento</h3>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button name="add_tx" value="1" type="submit">Guardar</button>
+    </form>
+
+    <hr style="margin:14px 0;border:0;border-top:1px solid #e5e7eb">
+
+    <h3>Recomendaciones</h3>
+    <form method="post">
+      {% csrf_token %}
+      <button class="secondary" name="gen_recos" value="1" type="submit">Generar recomendaciones</button>
+    </form>
+
+    {% if recs %}
+      <ul>
+      {% for r in recs %}
+        <li><strong>[{{ r.severity }}]</strong> {{ r.title }} <span class="muted">({{ r.status }})</span></li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Aún no hay recomendaciones.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>Snapshot (MVP)</h3>
+  {% if snap.weights %}
+    <table>
+      <tr><th>Activo</th><th>Peso</th></tr>
+      {% for sym, w in snap.weights.items %}
+      <tr><td>{{ sym }}</td><td>{{ w|floatformat:4 }}</td></tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Cargá compras/ventas para ver pesos.</p>
+  {% endif %}
+</div>
+{% endblock %}

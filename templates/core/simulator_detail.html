@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Simulación: {{ sim.name }}</h2>
+  <p class="muted">Preset: {{ sim.preset }} | Día: {{ sim.current_day }} | Cash virtual: {{ sim.virtual_cash }} | Total: {{ total_value }}</p>
+</div>
+
+<div class="row">
+  <div class="card col">
+    <h3>Operar (virtual)</h3>
+    <form method="post">
+      {% csrf_token %}
+      {{ trade_form.as_p }}
+      <button name="trade" value="1" type="submit">Ejecutar</button>
+    </form>
+
+    <hr style="margin:14px 0;border:0;border-top:1px solid #e5e7eb">
+
+    <h3>Avanzar reloj</h3>
+    <form method="post">
+      {% csrf_token %}
+      {{ adv_form.as_p }}
+      <button class="secondary" name="advance" value="1" type="submit">Avanzar</button>
+    </form>
+  </div>
+
+  <div class="card col">
+    <h3>Posiciones</h3>
+    {% if rows %}
+      <table>
+        <tr><th>Symbol</th><th>Cant.</th><th>Precio hoy</th><th>Valor</th></tr>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.symbol }}</td>
+          <td>{{ r.quantity }}</td>
+          <td>{{ r.price }}</td><td>{{ r.avg_price }}</td>
+          <td>{{ r.value }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="muted">Nota: precios se calculan determinísticamente (entrenamiento).</p>
+    {% else %}
+      <p class="muted">Sin posiciones. Probá comprar un símbolo (ej: FCI_MM, BONO_CER, AAPL).</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>Trades recientes</h3>
+  {% if trades %}
+    <table>
+      <tr><th>Fecha</th><th>Día</th><th>Symbol</th><th>Side</th><th>Cant.</th><th>Precio</th><th>Precio prom.</th></tr>
+      {% for t in trades %}
+      <tr>
+        <td>{{ t.created_at }}</td>
+        <td>{{ t.day }}</td>
+        <td>{{ t.symbol }}</td>
+        <td>{{ t.side }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>{{ t.price }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Sin trades aún.</p>
+  {% endif %}
+</div>
+{% endblock %}

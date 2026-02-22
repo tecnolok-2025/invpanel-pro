@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <div class="card col">
+    <h2>Activos</h2>
+    <p class="muted">Catálogo simple para usar en movimientos y simulador.</p>
+    {% if items %}
+      <table>
+        <tr><th>Símbolo</th><th>Nombre</th><th>Tipo</th><th>Moneda</th></tr>
+        {% for a in items %}
+        <tr>
+          <td>{{ a.symbol }}</td>
+          <td>{{ a.name }}</td>
+          <td>{{ a.asset_type }}</td>
+          <td>{{ a.currency }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Sin activos cargados aún.</p>
+    {% endif %}
+  </div>
+
+  <div class="card col">
+    <h3>Agregar activo</h3>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Guardar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

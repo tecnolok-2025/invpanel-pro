@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Dashboard</h2>
+  <p class="muted">Panel inicial: portafolios, recomendaciones y simulador (entrenamiento).</p>
+</div>
+
+<div class="row">
+  <div class="card col">
+    <h3>Portafolios</h3>
+    {% if portfolios %}
+      <ul>
+        {% for p in portfolios %}
+          <li><a href="/portfolios/{{ p.id }}/">{{ p.name }}</a> <span class="muted">({{ p.base_currency }})</span></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Aún no hay portafolios.</p>
+    {% endif %}
+    <p><a href="/portfolios/">Administrar portafolios →</a></p>
+  </div>
+
+  <div class="card col">
+    <h3>Simulador</h3>
+    {% if sims %}
+      <ul>
+        {% for s in sims %}
+          <li><a href="/simulator/{{ s.id }}/">{{ s.name }}</a> <span class="muted">(día {{ s.current_day }})</span></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Aún no hay simulaciones.</p>
+    {% endif %}
+    <p><a href="/simulator/">Ir al simulador →</a></p>
+  </div>
+</div>
+{% endblock %}

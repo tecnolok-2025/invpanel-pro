@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Cargar precios (CSV){% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Cargar precios (CSV) — para análisis (PRO)</h2>
+  <p class="muted">
+    Formato recomendado: <code>date,close</code> (fecha y precio).<br>
+    Acepta coma o punto y coma como separador.
+  </p>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div class="form-row">
+      {{ form.asset.label_tag }}
+      {{ form.asset }}
+    </div>
+    <div class="form-row">
+      {{ form.csv_file.label_tag }}
+      {{ form.csv_file }}
+    </div>
+    <button class="btn" type="submit">Subir y procesar</button>
+    <a class="btn btn-secondary" href="/analytics/">Volver al análisis</a>
+  </form>
+
+  <div class="card" style="margin-top: 12px;">
+    <h3>Ejemplo de CSV</h3>
+<pre>
+date,close
+2025-01-02,101.25
+2025-01-03,103.10
+2025-01-06,102.40
+</pre>
+    <p class="muted">
+      Si tu archivo usa <code>fecha</code> y <code>precio</code>, también lo interpreta.
+    </p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+Django>=5.2
+gunicorn>=22.0
+uvicorn[standard]>=0.30
+dj-database-url>=2.1
+whitenoise[brotli]>=6.6
+django-axes>=6.0
+psycopg[binary]>=3.2
+pywebpush
+cryptography
+
+reportlab>=4.0
+
+openai>=1.30.0

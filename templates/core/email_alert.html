@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>INVPanel PRO - Alerta diaria</title>
+  </head>
+  <body style="font-family: Arial, sans-serif; line-height: 1.45;">
+    <h2 style="margin: 0 0 8px 0;">INVPanel PRO — Alerta diaria (educativa)</h2>
+    <p style="margin: 0 0 12px 0;"><em>{{ disclaimer }}</em></p>
+
+    <p style="margin: 0 0 12px 0;">
+      <strong>Ventana de análisis:</strong> últimos {{ window_days }} días (según datos cargados en el sistema)
+    </p>
+
+    <h3 style="margin: 18px 0 8px 0;">Ranking (Sharpe simple / retorno)</h3>
+    {% if top %}
+      <ol>
+        {% for m in top %}
+          <li>
+            <strong>{{ m.asset.symbol }}</strong>
+            <ul>
+              <li>Retorno período: {{ m.period_return|floatformat:2 }}</li>
+              <li>Volatilidad anualizada: {{ m.vol_ann|floatformat:2 }}</li>
+              <li>Sharpe simple: {{ m.sharpe|floatformat:2 }}</li>
+              <li>Drawdown máximo: {{ m.max_drawdown|floatformat:2 }}</li>
+            </ul>
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p>No hay datos históricos aún. Primero cargá precios por CSV en: <a href="{{ base_url }}prices/upload/">{{ base_url }}prices/upload/</a></p>
+    {% endif %}
+
+    <hr />
+
+    <h3 style="margin: 18px 0 8px 0;">Procedimiento (paso a paso) para practicar HOY</h3>
+    <ol>
+      <li>
+        Entrá al sistema: <a href="{{ login_url }}">{{ login_url }}</a>
+      </li>
+      <li>
+        Abrí el menú <strong>“Análisis (PRO)”</strong> y revisá el ranking.
+      </li>
+      <li>
+        <strong>Modo SIMULACIÓN:</strong>
+        <ul>
+          <li>Creá una simulación nueva.</li>
+          <li>Elegí un monto chico (ej: 100 USD).</li>
+          <li>Registrá una compra simulada del activo #1 del ranking.</li>
+          <li>Guardá nota: “Compra simulada por señal estadística”.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>Modo REAL (monto mínimo, educativo):</strong>
+        <ul>
+          <li>Verificá en tu broker: símbolo, mercado, comisiones y liquidez.</li>
+          <li>Operá con monto pequeño.</li>
+          <li>En INVPanel, registrá la operación REAL para control.</li>
+        </ul>
+      </li>
+      <li>
+        Mañana: compará el resultado y repetí.
+      </li>
+    </ol>
+
+    <p>
+      Manual dentro del sistema: <a href="{{ base_url }}manual/">{{ base_url }}manual/</a>
+    </p>
+  </body>
+</html>

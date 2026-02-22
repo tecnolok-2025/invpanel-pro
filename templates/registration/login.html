@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:520px;margin:0 auto;">
+  <h2>Ingresar</h2>
+  <p class="muted">Acceso al panel (modo FREE).</p>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Entrar</button>
+  </form>
+<p style="margin-top:12px;" class="muted">¿Dudas? Mirá el <a href="/manual/" target="_blank">Manual de uso</a>.</p>
+</div>
+{% endblock %}

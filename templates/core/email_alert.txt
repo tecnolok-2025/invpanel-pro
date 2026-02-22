@@ -1,0 +1,42 @@
+INVPanel PRO — Alerta diaria (educativa)
+
+{{ disclaimer }}
+
+Ventana de análisis: últimos {{ window_days }} días (según datos cargados en el sistema)
+
+TOP (ranking por Sharpe simple / retorno):
+{% if top %}
+{% for m in top %}
+- {{ forloop.counter }}. {{ m.asset.symbol }} | Retorno: {{ m.period_return|floatformat:2 }} | Vol: {{ m.vol_ann|floatformat:2 }} | Sharpe: {{ m.sharpe|floatformat:2 }} | DD Máx: {{ m.max_drawdown|floatformat:2 }}
+{% endfor %}
+{% else %}
+- No hay datos históricos aún. Cargá precios por CSV en: {{ base_url }}prices/upload/
+{% endif %}
+
+------------------------------------------------------------
+PROCEDIMIENTO (paso a paso) para practicar HOY
+
+1) Entrá al sistema:
+   {{ login_url }}
+
+2) Menú "Análisis (PRO)":
+   - Revisá el ranking y abrí el detalle.
+
+3) Si estás en modo SIMULACIÓN:
+   - Creá una simulación nueva.
+   - Elegí un monto chico (ej: 100 USD).
+   - Registrá una operación de compra simulada del activo #1 del ranking.
+   - Guardá nota: "Compra simulada por señal estadística".
+
+4) Si querés hacerlo REAL (monto mínimo):
+   - Primero verificá en tu broker: símbolo, mercado, comisiones y liquidez.
+   - Operá con monto pequeño (educativo).
+   - En el sistema, registrá la operación REAL para llevar control.
+
+5) Mañana: compará el resultado y repetí.
+
+Consejo: Si el ranking está vacío, primero cargá datos históricos por CSV.
+
+Link útil:
+- Manual dentro del sistema: {{ base_url }}manual/
+

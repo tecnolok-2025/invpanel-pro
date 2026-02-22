@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Diagnóstico Push — InvPanel PRO{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2>Diagnóstico · Push</h2>
+  <p class="muted">
+    Esta pantalla sirve para entender por qué “Text Push / Notificaciones” puede fallar.
+    No es obligatoria para usar el sistema (Oportunidades/Badges funcionan igual).
+  </p>
+
+  <ul>
+    <li><b>Suscripciones guardadas en este usuario:</b> {{ subs_count }}</li>
+    <li><b>VAPID privado cargado:</b> {% if private_key_ok %}✅ Sí{% else %}❌ No{% endif %}</li>
+    <li><b>VAPID claims sub:</b> {% if claims_sub %}✅ Configurado{% else %}❌ Falta{% endif %}</li>
+  </ul>
+
+  {% if not private_key_ok or not claims_sub %}
+    <div class="card" style="border:1px solid var(--danger);">
+      <div style="font-weight:900; color:var(--danger);">Falta configuración de Push</div>
+      <div class="muted" style="margin-top:6px;">
+        Para habilitar notificaciones push se requieren variables de entorno:
+        <b>VAPID_PUBLIC_KEY</b>, <b>VAPID_PRIVATE_KEY_PEM_B64</b>, <b>VAPID_CLAIMS_SUB</b>.
+      </div>
+      <div class="muted" style="margin-top:8px;">
+        Generación rápida: ejecutar <code>python tools/generate_vapid.py</code> y copiar los valores en Render.
+      </div>
+    </div>
+  {% endif %}
+
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+    <a class="btn" href="/settings/notifications/">Ir a Notificaciones</a>
+    <a class="btn btn-secondary" href="/">Volver al panel</a>
+  </div>
+
+  <div class="muted" style="margin-top:14px;">
+    Nota: en iPhone, para push se recomienda usar la web como PWA (Agregar a Inicio).
+  </div>
+</div>
+{% endblock %}

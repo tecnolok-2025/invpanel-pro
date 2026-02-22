@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Oportunidades — InvPanel PRO{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:0;">Oportunidades</h2>
+      <div class="muted">Abiertas (OPEN): <b>{{ open_count }}</b> — el badge rojo del menú muestra este valor.</div>
+<div class="muted">IA: {% if openai_configured %}<b>configurada</b>{% else %}<b>NO configurada</b> (faltan variables en Render){% endif %} — Gobernanza: {% if ai_governance %}ON (score mínimo {{ ai_min_score }}){% else %}OFF{% endif %}</div>
+    </div>
+
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <form method="post" action="/opportunities/" style="margin:0;">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="generate" />
+        <button class="btn btn-primary" type="submit">Generar</button>
+      </form>
+<form method="post" action="/opportunities/" style="margin:0;">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="ai_eval" />
+  <button class="btn" type="submit" {% if not openai_configured %}disabled{% endif %}>
+    Evaluar con IA
+  </button>
+</form>
+
+      <form method="post" action="/opportunities/" style="margin:0;">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="demo" />
+        <button class="btn" type="submit">Generar DEMO</button>
+      </form>
+      <a class="btn btn-secondary" href="/opportunities/db/">Base de datos</a>
+    </div>
+  </div>
+</div>
+
+{% if recs %}
+  {% for r in recs %}
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:900; font-size:16px;">{{ r.title }}</div>
+          <div class="muted" style="font-size:13px;">Código: <b>{{ r.code }}</b> · Severidad: <b>{{ r.severity }}</b> · Portafolio: <b>{{ r.portfolio.name }}</b></div>
+        </div>
+        <div class="muted" style="font-size:13px;">{{ r.created_at|date:"Y-m-d H:i" }}</div>
+      </div>
+
+      <div style="margin-top:10px; line-height:1.5;">{{ r.rationale }}</div>
+
+<div class="card" style="margin-top:10px; padding:10px; border:1px dashed #bbb; background:#fafafa;">
+  <div style="font-weight:800;">IA</div>
+  {% if r.ai_evaluated_at %}
+    <div class="muted" style="font-size:13px;">
+      Score: <b>{{ r.ai_score }}</b> · Confianza: <b>{{ r.ai_confidence }}</b> · Acción: <b>{{ r.ai_action }}</b>
+      · Evaluada: {{ r.ai_evaluated_at|date:"Y-m-d H:i" }}
+    </div>
+    {% if r.ai_summary %}<div style="margin-top:6px;">{{ r.ai_summary }}</div>{% endif %}
+  {% else %}
+    <div class="muted" style="font-size:13px;">Sin evaluación IA todavía.</div>
+  {% endif %}
+</div>
+
+
+      {% if r.evidence %}
+        <details style="margin-top:10px;">
+          <summary style="cursor:pointer; font-weight:800;">Ver evidencia</summary>
+          <pre style="white-space:pre-wrap; margin:10px 0 0; padding:10px; border:1px solid var(--border); border-radius:12px; background:#fff;">{{ r.evidence }}</pre>
+        </details>
+      {% endif %}
+
+      <form method="post" action="/opportunities/" style="margin-top:12px;">
+        {% csrf_token %}
+        <input type="hidden" name="rid" value="{{ r.id }}" />
+        <label class="muted" style="font-weight:700; font-size:13px;">Nota (opcional)</label>
+        <textarea name="note" rows="2" placeholder="Ej.: Acepto por rebalanceo / Ignoro por perfil de riesgo" style="margin-top:6px;">{{ r.decision_note|default:"" }}</textarea>
+
+        <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
+          <button class="btn btn-primary" type="submit" name="action" value="accept">Aceptar</button>
+          <button class="btn" type="submit" name="action" value="ignore">Ignorar</button>
+        </div>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card">
+    <div style="font-weight:900;">No hay oportunidades abiertas.</div>
+    <div class="muted" style="margin-top:6px;">
+      Para probar el sistema tocá <b>Generar DEMO</b> (crea ejemplos). Para generar desde tu portafolio, tocá <b>Generar</b>.
+    </div>
+  </div>
+{% endif %}
+
+{% endblock %}
