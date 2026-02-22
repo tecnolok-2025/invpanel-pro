@@ -1,0 +1,2 @@
+/* Basic stylesheet to avoid 404s on /static/css/base.css */
+:root { color-scheme: light; }
