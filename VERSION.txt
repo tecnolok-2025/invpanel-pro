@@ -1,2 +1,1 @@
-InvPanel Pro v10.0 - full integrated
-Generated: 2026-02-22
+v11.0-full (render port-scan + start.sh)

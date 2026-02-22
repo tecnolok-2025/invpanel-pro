@@ -131,6 +131,9 @@ SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 
 SECURE_SSL_REDIRECT = bool(render_host) and not DEBUG
+# Importante (Render): permitir que /healthz/ responda sin forzar redirect a HTTPS.
+# Esto ayuda a que los chequeos (health checks / port scan) detecten el puerto.
+SECURE_REDIRECT_EXEMPT = [r"^healthz/$"]
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30 if render_host else 0
