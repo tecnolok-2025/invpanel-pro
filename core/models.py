@@ -85,13 +85,16 @@ class Recommendation(TimeStamped):
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
     decision_note = models.CharField(max_length=240, blank=True)
 
-# --- IA (evaluación y gobernanza) ---
-ai_score = models.IntegerField(null=True, blank=True)
-ai_confidence = models.IntegerField(null=True, blank=True)
-ai_action = models.CharField(max_length=12, blank=True, default="HOLD")  # default to avoid NULL inserts
-ai_summary = models.TextField(blank=True)
-ai_reasons = models.JSONField(default=dict, blank=True)
-ai_evaluated_at = models.DateTimeField(null=True, blank=True)
+    # --- IA (evaluación y gobernanza) ---
+    # Importante: estos campos deben estar DENTRO del modelo Recommendation.
+    # Si quedan a nivel módulo, Django NO los incluye en los INSERT y la DB
+    # (que sí tiene columnas NOT NULL) dispara IntegrityError.
+    ai_score = models.IntegerField(null=True, blank=True)
+    ai_confidence = models.IntegerField(null=True, blank=True)
+    ai_action = models.CharField(max_length=12, blank=True, default="HOLD")
+    ai_summary = models.TextField(blank=True, default="")
+    ai_reasons = models.JSONField(default=dict, blank=True)
+    ai_evaluated_at = models.DateTimeField(null=True, blank=True)
 
 
 class Simulation(TimeStamped):
