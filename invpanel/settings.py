@@ -20,6 +20,20 @@ CSRF_TRUSTED_ORIGINS = []
 if render_host:
     CSRF_TRUSTED_ORIGINS.append(f"https://{render_host}")
 
+# Allow explicit CSRF trusted origins via environment variable (e.g. custom domains on Render)
+csrf_env = os.environ.get("CSRF_TRUSTED_ORIGINS")
+if csrf_env:
+    CSRF_TRUSTED_ORIGINS += [o.strip() for o in csrf_env.split(",") if o.strip()]
+
+# If ALLOWED_HOSTS is provided via ENV, also include them as https origins (helps when serving via custom domain)
+if allowed_hosts_env:
+    for h in [x.strip() for x in allowed_hosts_env.split(",") if x.strip()]:
+        if h not in ("localhost", "127.0.0.1"):
+            https = f"https://{h}"
+            if https not in CSRF_TRUSTED_ORIGINS:
+                CSRF_TRUSTED_ORIGINS.append(https)
+
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

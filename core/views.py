@@ -812,49 +812,63 @@ def run_alerts(request):
 
 
 def _manual_sections():
-    # Manual operativo (orientado a usuario)
+    # Manual operativo (orientado a usuario, narrado y paso a paso)
     return [
-        ("Objetivo", [
-            "Operar un panel personal con **portafolios**, **oportunidades** (recomendaciones) y **históricos**.",
-            "Que el sistema sea usable desde **celular (PWA iPhone/Android)** y también desde PC.",
+        ("Qué es y para qué sirve", [
+            "InvPanel PRO es un panel web personal para gestionar un portafolio y registrar decisiones sobre oportunidades (recomendaciones).",
+            "Está pensado para usarse desde PC o desde el celular como app (PWA: se instala como ícono en la pantalla de inicio).",
+            "Importante: el sistema no compra/vende en ningún broker. Solo registra información y estados para tu análisis y tu decisión.",
         ]),
-        ("Alcance", [
-            "✅ Guarda portafolios, transacciones e históricos de precios (si los cargás).",
-            "✅ Genera oportunidades DEMO y oportunidades basadas en reglas internas.",
-            "✅ (v10) Puede evaluar oportunidades con IA (si hay OPENAI_API_KEY).",
-            "❌ No ejecuta compras/ventas reales en brokers. Las decisiones quedan registradas en el sistema.",
+        ("Cómo entrar y orientarte (primer uso)", [
+            "1) Abrí la URL del sistema y entrá con tu usuario y contraseña.",
+            "2) Mirá el menú superior: vas a ver accesos a Portafolio, Oportunidades, Históricos y Manual.",
+            "3) Si aparece un número rojo (badge) en Oportunidades, significa que hay oportunidades abiertas pendientes (estado OPEN).",
+            "Tip: cuando haces una acción correcta, el sistema muestra un mensaje en pantalla (caja verde o roja).",
         ]),
-        ("Procedimiento diario (60–90 segundos)", [
-            "1) Entrá y hacé **Login**.",
-            "2) Abrí **Oportunidades**: revisá las OPEN.",
-            "3) Si el modo IA está activo: tocá **Evaluar con IA**.",
-            "4) Aceptá solo las oportunidades recomendadas (o las que permita la gobernanza).",
-            "5) Revisá el **badge rojo**: debe bajar cuando aceptás/ignorás.",
+        ("Oportunidades: qué son", [
+            "Una 'Oportunidad' es una recomendación registrada en el sistema para que la revises y tomes una decisión.",
+            "Cada oportunidad tiene: título, severidad (Alta/Media/Baja), explicación (rationale) y evidencia (datos asociados).",
+            "Estados principales: OPEN (abierta), ACCEPTED (aceptada), IGNORED (ignorada).",
         ]),
-        ("Oportunidades — botones", [
-            "**Generar DEMO**: crea oportunidades de prueba para validar badges y flujo.",
-            "**Aceptar**: marca como ACCEPTED (puede estar gobernado por IA).",
-            "**Ignorar**: marca como IGNORED.",
-            "**Reabrir** (en Base de Datos): vuelve a OPEN.",
+        ("Oportunidades: botones y qué hace cada uno", [
+            "Generar DEMO: crea 3 oportunidades de prueba para que veas tarjetas, badges y el flujo completo.",
+            "Aceptar: cambia una oportunidad a estado ACCEPTED (ya no cuenta como abierta).",
+            "Ignorar: cambia una oportunidad a estado IGNORED (ya no cuenta como abierta).",
+            "Evaluar con IA: si está configurada la IA, agrega un análisis adicional a las oportunidades abiertas (no es obligatorio).",
         ]),
-        ("Base de Datos de Oportunidades", [
-            "Entrá a **Oportunidades → Base de datos**.",
-            "Filtrá por fecha/estado, buscá por texto y elegí una oportunidad.",
-            "**Enviar al portafolio** equivale a **Aceptar**.",
+        ("Cómo probar el sistema en 2 minutos (paso a paso)", [
+            "1) Entrá a Oportunidades.",
+            "2) Tocá el botón 'Generar DEMO'.",
+            "3) Debe aparecer un mensaje verde diciendo cuántas oportunidades DEMO se generaron.",
+            "4) Deben aparecer 3 tarjetas (Alta/Media/Baja).",
+            "5) Probá 'Aceptar' en una tarjeta: el badge rojo debería bajar.",
+            "6) Probá 'Ignorar' en otra tarjeta: el badge vuelve a bajar.",
+            "Si no aparecen tarjetas después de Generar DEMO, revisá la sección Troubleshooting.",
+        ]),
+        ("Base de datos de Oportunidades (historial)", [
+            "Entrá a Oportunidades → Base de datos para ver todas las oportunidades (abiertas y cerradas).",
+            "Ahí podés filtrar por estado, buscar por texto y abrir una oportunidad para ver el detalle completo.",
+            "Si necesitás volver a abrir una oportunidad, existe la acción 'Reabrir' (pasa a OPEN).",
         ]),
         ("Históricos (Análisis PRO)", [
-            "Entrá a **Históricos** para ver precios cargados.",
-            "Cargá un CSV y verificá que aparezca en el listado.",
+            "Históricos te permite cargar y ver datos de precios o series históricas para análisis.",
+            "Si cargás un CSV, debería aparecer en el listado y poder consultarse luego.",
+            "Si no ves los datos, verificá el formato del CSV y que el upload haya finalizado.",
         ]),
-        ("PWA iPhone/Android", [
-            "En iPhone: abrí en Safari → **Compartir → Agregar a inicio**.",
-            "Si ves pantalla blanca: borrá datos del sitio / reinstalá la PWA.",
-            "Badges del ícono dependen del soporte del sistema; el badge del menú es el principal.",
+        ("IA (opcional)", [
+            "El botón 'Evaluar con IA' se habilita solo si existe la variable de entorno OPENAI_API_KEY.",
+            "Si no está configurada, el sistema funciona igual: podés aceptar/ignorar manualmente.",
         ]),
-        ("Troubleshooting rápido", [
-            "Si Render dice **No open HTTP ports**: configurá Health Check Path a **/healthz/**.",
-            "Si no aparecen badges: recargá; el contador se actualiza cada ~30s (si polling habilitado).",
-            "Si la IA no evalúa: falta **OPENAI_API_KEY** en variables de entorno.",
+        ("Instalar como app (PWA) en iPhone/Android", [
+            "iPhone: abrir en Safari → botón Compartir → 'Agregar a inicio'.",
+            "Android: abrir en Chrome → menú ⋮ → 'Agregar a pantalla principal' o 'Instalar app'.",
+            "Si ves pantalla blanca en la PWA: borrá datos del sitio y reinstalá el acceso.",
+        ]),
+        ("Troubleshooting (problemas comunes)", [
+            "Al presionar un botón no pasa nada / aparece 'Error cliente': suele ser un problema de CSRF o dominio no confiable. Revisá CSRF_TRUSTED_ORIGINS en Render.",
+            "Mensaje de Render 'No open HTTP ports': configurar Health Check Path en /healthz/.",
+            "No aparece el badge o no se actualiza: recargá la página; el badge se refresca cada 30 segundos automáticamente.",
+            "La IA no evalúa: falta OPENAI_API_KEY o está mal escrita en variables de entorno.",
         ]),
     ]
 
