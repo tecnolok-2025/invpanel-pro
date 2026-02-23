@@ -48,7 +48,6 @@ def generate_recommendations(portfolio, max_items=10):
                 title=f"Concentración alta en {sym}",
                 rationale="Un solo activo supera el umbral. Considerá diversificar para reducir riesgo específico.",
                 evidence={"symbol": sym, "weight": float(w), "threshold": 0.35},
-                ai_action="HOLD",
             )
             created += 1
             if created >= max_items:
@@ -62,7 +61,6 @@ def generate_recommendations(portfolio, max_items=10):
             title="Portafolio sin posiciones detectadas",
             rationale="Cargá movimientos BUY/SELL para obtener métricas y sugerencias con evidencia.",
             evidence={"total_value": float(snap["total"])},
-            ai_action="HOLD",
         )
         created += 1
 

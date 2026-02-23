@@ -1,1 +1,2 @@
-v11.0-full (render port-scan + start.sh)
+InvPanel Pro v11.2 - Render-friendly (ai_action default HOLD)
+Generated: 2026-02-22
