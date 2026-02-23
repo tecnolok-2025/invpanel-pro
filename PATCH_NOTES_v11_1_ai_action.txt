@@ -1,0 +1,5 @@
+v11.1 patch - fixes 500 on /opportunities/ by ensuring Recommendation.ai_action is never NULL.
+Changes:
+- core/models.py: ai_action default='HOLD'
+- core/reco_engine.py: pass ai_action='HOLD' on Recommendation.objects.create
+Date: 2026-02-22
