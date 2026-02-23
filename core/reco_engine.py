@@ -2,6 +2,36 @@ from decimal import Decimal
 from collections import defaultdict
 from .models import Recommendation, Transaction
 
+from django.db import IntegrityError
+
+def _create_reco_safe(**kwargs):
+    """Create Recommendation robustly across schema drift (fields added/removed)."""
+    # Filter kwargs to existing model fields
+    field_names = {f.name for f in Recommendation._meta.get_fields()}
+    filtered = {k: v for k, v in kwargs.items() if k in field_names}
+
+    # Ensure defaults for ai_* if those fields exist
+    if "ai_action" in field_names and "ai_action" not in filtered:
+        filtered["ai_action"] = "HOLD"
+    if "ai_summary" in field_names and "ai_summary" not in filtered:
+        filtered["ai_summary"] = ""
+
+    try:
+        return _create_reco_safe(**filtered)
+    except TypeError:
+        # In case schema changed between import time and runtime
+        filtered.pop("ai_action", None)
+        filtered.pop("ai_summary", None)
+        return _create_reco_safe(**filtered)
+    except IntegrityError:
+        # If DB enforces NOT NULL and we missed defaults for any reason
+        if "ai_action" in field_names:
+            filtered["ai_action"] = filtered.get("ai_action") or "HOLD"
+        if "ai_summary" in field_names:
+            filtered["ai_summary"] = filtered.get("ai_summary") or ""
+        return _create_reco_safe(**filtered)
+
+
 def holdings_snapshot(portfolio):
     qty = defaultdict(Decimal)
     last_price = defaultdict(Decimal)
@@ -41,7 +71,7 @@ def generate_recommendations(portfolio, max_items=10):
     created = 0
     for sym, w in sorted(weights.items(), key=lambda x: x[1], reverse=True):
         if w >= Decimal("0.35"):
-            Recommendation.objects.create(
+            _create_reco_safe(
                 portfolio=portfolio,
                 code="CONCENTRATION_TOP_ASSET",
                 severity="MED" if w < Decimal("0.50") else "HIGH",
@@ -56,7 +86,7 @@ def generate_recommendations(portfolio, max_items=10):
                 return created
 
     if snap["total"] == 0:
-        Recommendation.objects.create(
+        _create_reco_safe(
             portfolio=portfolio,
             code="EMPTY_PORTFOLIO",
             severity="LOW",
