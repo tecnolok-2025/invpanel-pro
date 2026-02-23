@@ -1,0 +1,871 @@
+--- a/core/reco_engine.py
++++ b/core/reco_engine.py
+@@ -1,71 +1,417 @@
+-"""Recommendation engine helpers.
++from __future__ import annotations
+ 
+-This file is intentionally defensive: production DB schema may lag behind code during deploys.
+-We therefore:
+-- Provide safe defaults for new NOT NULL fields when present (ai_action, ai_summary, etc.)
+-- Filter kwargs to the actual Recommendation model fields at runtime (so extra keys won't crash)
+-"""
++from dataclasses import dataclass
++from datetime import timedelta
++from decimal import Decimal
++from typing import Dict, Iterable, List, Optional, Tuple
+ 
+-from __future__ import annotations
++from django.db import IntegrityError
++from django.utils import timezone
+ 
+-from typing import Any, Dict
++from .models import AssetPrice, Recommendation, Transaction
+ 
+-from django.db import transaction
+ 
+-from .models import Recommendation
++@dataclass(frozen=True)
++class RecoDef:
++    """Definición de una oportunidad a crear."""
+ 
++    code: str
++    severity: str
++    title: str
++    rationale: str
++    evidence: Dict
+ 
+-def _create_reco_safe(**kwargs: Any) -> Recommendation:
+-    """Create a Recommendation, filtering kwargs to current model fields.
+ 
+-    Avoids crashes when code and DB schema are temporarily out of sync.
+-    """
+-    # Current field names (concrete fields only)
+-    field_names = {f.name for f in Recommendation._meta.get_fields()}
++@dataclass(frozen=True)
++class RecoGenerationResult:
++    created: int
++    reason: str = ""
++
+ 
+-    # Fill defaults only if the field exists on the model.
+-    if "ai_action" in field_names and kwargs.get("ai_action") is None:
+-        kwargs["ai_action"] = "HOLD"  # neutral default
+-    if "ai_summary" in field_names and kwargs.get("ai_summary") is None:
+-        kwargs["ai_summary"] = ""  # empty but not NULL
+-    if "ai_confidence" in field_names and kwargs.get("ai_confidence") is None:
+-        kwargs["ai_confidence"] = 0
+-    if "ai_score" in field_names and kwargs.get("ai_score") is None:
+-        kwargs["ai_score"] = 0
++# ---------------------------------------------------------------------------
++# Helpers (safe creation)
+ 
+-    filtered = {k: v for k, v in kwargs.items() if k in field_names}
+-    return Recommendation.objects.create(**filtered)
+ 
++def _create_reco_safe(
++    *,
++    portfolio,
++    code: str,
++    severity: str,
++    title: str,
++    rationale: str,
++    evidence: Dict,
++    status: str,
++) -> Tuple[Optional[Recommendation], bool]:
++    """Crea una Recommendation de forma segura.
+ 
+-def generate_recommendations(panel) -> int:
+-    """Generate recommendations for a given panel.
++    Devuelve: (obj | None, created: bool)
+ 
+-    Returns number of created recommendations.
++    - Si ya existe una OPEN con el mismo code, no duplica.
++    - Si ocurre un IntegrityError (p. ej. migraciones inconsistentes), no rompe la app.
+     """
+-    created = 0
+ 
+-    # NOTE: keep the core business logic you already had; this is a minimal,
+-    # schema-safe wrapper around Recommendation.objects.create().
+-    #
+-    # If your previous implementation already built recos as dicts and called
+-    # Recommendation.objects.create(...), replace that call with _create_reco_safe(...).
+-
+-    # ---- Existing logic placeholder (keep your loops / scoring) ----
+-    # The following block is intentionally minimal and should integrate with your current
+-    # implementation. We attempt to call a helper 'build_recos' if it exists.
+     try:
+-        build_recos = globals().get("build_recos")
++        exists_open = Recommendation.objects.filter(
++            portfolio=portfolio, code=code, status=Recommendation.Status.OPEN
++        ).exists()
++        if exists_open:
++            return None, False
++
++        rec = Recommendation.objects.create(
++            portfolio=portfolio,
++            code=code,
++            severity=severity,
++            title=title,
++            rationale=rationale,
++            evidence=evidence or {},
++            status=status,
++        )
++        return rec, True
++    except IntegrityError:
++        return None, False
+     except Exception:
+-        build_recos = None
++        # Nunca romper por recomendaciones.
++        return None, False
++
++
++# ---------------------------------------------------------------------------
++# Portfolio snapshots for simple, explainable rule-based engine
++
++
++def _holdings_snapshot(portfolio) -> Dict:
++    """Snapshot simple de holdings desde transacciones."""
++
++    holdings: Dict[str, Decimal] = {}
++    neg_symbols: List[str] = []
++
++    qs = (
++        Transaction.objects.filter(portfolio=portfolio)
++        .select_related("asset")
++        .order_by("-tx_date", "-id")[:800]
++    )
++
++    for t in qs:
++        sym = (t.asset.symbol or "UNK").upper().strip()
++        qty = Decimal(t.quantity or 0)
++        if t.tx_type == "BUY":
++            holdings[sym] = holdings.get(sym, Decimal("0")) + qty
++        elif t.tx_type == "SELL":
++            holdings[sym] = holdings.get(sym, Decimal("0")) - qty
++
++    # normalizar / filtrar
++    cleaned: Dict[str, Decimal] = {}
++    for sym, qty in holdings.items():
++        if qty < Decimal("-0.000001"):
++            neg_symbols.append(sym)
++        if qty > Decimal("0.000001"):
++            cleaned[sym] = qty
++
++    return {
++        "holdings": cleaned,
++        "tx_count": qs.count() if hasattr(qs, "count") else len(qs),
++        "negative": sorted(set(neg_symbols)),
++    }
++
++
++def _latest_prices(symbols: Iterable[str]) -> Dict[str, Dict]:
++    """Último precio por símbolo.
++
++    Nota: AssetPrice referencia Asset por FK, no guarda symbol directo.
++    """
++
++    out: Dict[str, Dict] = {}
++    for sym in symbols:
++        p = (
++            AssetPrice.objects.filter(asset__symbol=sym)
++            .select_related("asset")
++            .order_by("-date")
++            .first()
++        )
++        if p:
++            out[sym] = {
++                "date": p.date,
++                "close": Decimal(p.close),
++                "currency": getattr(p.asset, "currency", ""),
++                "asset_type": getattr(p.asset, "asset_type", ""),
++                "name": getattr(p.asset, "name", ""),
++            }
++    return out
++
++
++# ---------------------------------------------------------------------------
++# Rule-based generator (fast, explainable)
++
++
++def build_recos(portfolio) -> Tuple[List[RecoDef], str]:
++    """Genera oportunidades con reglas simples y auditables.
++
++    Prioridades de diseño:
++    - Siempre devolver algo útil (aunque el portafolio esté vacío).
++    - Reglas simples: concentración / moneda / precios faltantes / precios viejos.
++    - Explicaciones claras en castellano.
++
++    Retorna: ([RecoDef...], reason_if_empty)
++    """
++
++    today = timezone.localdate()
++
++    snap = _holdings_snapshot(portfolio)
++    holdings: Dict[str, Decimal] = snap["holdings"]
++    tx_count: int = int(snap["tx_count"] or 0)
++    negatives: List[str] = snap["negative"]
++
++    recos: List[RecoDef] = []
++
++    # 0) Calidad de datos: ventas > compras
++    if negatives:
++        sym = negatives[0]
++        recos.append(
++            RecoDef(
++                code=f"DATA-NEG-{sym}-{portfolio.id}",
++                severity=Recommendation.Severity.HIGH,
++                title=f"Inconsistencia: posición negativa en {sym}",
++                rationale=(
++                    "Detecté una posición negativa (vendiste más de lo que compraste) para este símbolo. "
++                    "Esto suele indicar carga incompleta de transacciones o un error en el tipo (BUY/SELL). "
++                    "Mientras exista esta inconsistencia, cualquier cálculo de exposición o concentración puede ser incorrecto."
++                ),
++                evidence={
++                    "tipo": "calidad_datos",
++                    "simbolo": sym,
++                    "nota": "Revisar transacciones BUY/SELL del portafolio.",
++                },
++            )
++        )
++
++    # 1) Portafolio sin datos
++    if tx_count == 0:
++        recos.append(
++            RecoDef(
++                code=f"SETUP-EMPTY-{portfolio.id}",
++                severity=Recommendation.Severity.MED,
++                title="Portafolio sin movimientos cargados",
++                rationale=(
++                    "Para que el botón ‘Generar’ produzca oportunidades reales, primero necesitás cargar tu portafolio: "
++                    "agregá Activos (símbolos) y luego registrá transacciones (BUY/SELL) dentro del portafolio. "
++                    "Si tu objetivo es solo aprender el flujo, usá ‘Generar DEMO’."
++                ),
++                evidence={
++                    "tipo": "setup",
++                    "tx_count": tx_count,
++                    "siguiente_paso": "Ir a Portafolios → abrir tu portafolio → cargar transacciones.",
++                },
++            )
++        )
++
++    # 2) Hay transacciones pero no hay holdings (p.ej. todo vendido)
++    if tx_count > 0 and not holdings:
++        recos.append(
++            RecoDef(
++                code=f"SETUP-NOHOLD-{portfolio.id}",
++                severity=Recommendation.Severity.LOW,
++                title="Sin posiciones abiertas (holdings = 0)",
++                rationale=(
++                    "Hay movimientos cargados, pero hoy no tenés posiciones netas positivas (todo quedó en cero). "
++                    "Si esto es correcto, no hay mucho para alertar. Si no es correcto, revisá BUY/SELL o cantidades." 
++                ),
++                evidence={"tipo": "estado_portafolio", "tx_count": tx_count},
++            )
++        )
++
++    # 3) Si hay holdings, aplicar reglas de exposición
++    if holdings:
++        symbols = sorted(holdings.keys())
++        prices = _latest_prices(symbols)
++
++        missing_prices = [s for s in symbols if s not in prices]
++        if missing_prices:
++            recos.append(
++                RecoDef(
++                    code=f"PRICES-MISSING-{portfolio.id}",
++                    severity=Recommendation.Severity.MED,
++                    title="Faltan precios cargados para algunos activos",
++                    rationale=(
++                        "Para calcular concentración, riesgo y alertas con más precisión, el sistema necesita precios históricos (CSV) "
++                        "para cada símbolo. Te faltan precios para: "
++                        f"{', '.join(missing_prices[:10])}" + ("…" if len(missing_prices) > 10 else "") + ". "
++                        "Podés cargarlos en Análisis (PRO) → Cargar precios (CSV)."
++                    ),
++                    evidence={"tipo": "precios", "missing": missing_prices},
++                )
++            )
++
++        # Valuación (solo símbolos con precios)
++        values: Dict[str, Decimal] = {}
++        total = Decimal("0")
++        stale: List[Dict] = []
++
++        for sym, qty in holdings.items():
++            p = prices.get(sym)
++            if not p:
++                continue
++            close = Decimal(p["close"])
++            v = (qty * close)
++            values[sym] = v
++            total += v
++            age = (today - p["date"]).days
++            if age > 14:
++                stale.append({"symbol": sym, "age_days": age, "date": str(p["date"]), "close": float(close)})
++
++        if total <= Decimal("0"):
++            # No se pudo valuar (no hay precios para ninguno, o todo 0)
++            recos.append(
++                RecoDef(
++                    code=f"PRICES-ALLMISSING-{portfolio.id}",
++                    severity=Recommendation.Severity.MED,
++                    title="No hay precios suficientes para generar alertas de exposición",
++                    rationale=(
++                        "Detecté posiciones, pero no pude valorarlas porque faltan precios históricos. "
++                        "Cargá al menos un CSV por símbolo para habilitar reglas de concentración/moneda/antigüedad."
++                    ),
++                    evidence={"tipo": "precios", "holdings": {k: float(v) for k, v in holdings.items()}},
++                )
++            )
++            return recos, ""
++
++        # 3a) Concentración
++        weights = {sym: (v / total) for sym, v in values.items() if total > 0}
++        top_sym = max(weights, key=lambda k: weights[k])
++        top_w = weights[top_sym]
++        if top_w >= Decimal("0.55"):
++            recos.append(
++                RecoDef(
++                    code=f"CONC-HIGH-{top_sym}-{portfolio.id}",
++                    severity=Recommendation.Severity.HIGH,
++                    title=f"Alta concentración en {top_sym} ({(top_w*100):.1f}%)",
++                    rationale=(
++                        "Una sola posición concentra más de la mitad del valor estimado del portafolio. "
++                        "Esto incrementa el riesgo específico (lo que pase con ese activo domina el resultado). "
++                        "Acción sugerida: revisar si está alineado con tu perfil; considerar diversificar o rebalancear gradualmente."
++                    ),
++                    evidence={
++                        "tipo": "concentracion",
++                        "top": top_sym,
++                        "top_weight": float(top_w),
++                        "weights": {k: float(v) for k, v in sorted(weights.items(), key=lambda kv: kv[1], reverse=True)[:8]},
++                    },
++                )
++            )
++        elif top_w >= Decimal("0.35"):
++            recos.append(
++                RecoDef(
++                    code=f"CONC-MED-{top_sym}-{portfolio.id}",
++                    severity=Recommendation.Severity.MED,
++                    title=f"Concentración moderada en {top_sym} ({(top_w*100):.1f}%)",
++                    rationale=(
++                        "La posición principal pesa más de un tercio del portafolio. "
++                        "No siempre es malo, pero conviene monitorearlo y definir un rango objetivo (p. ej. 20–35%) según tu estrategia."
++                    ),
++                    evidence={
++                        "tipo": "concentracion",
++                        "top": top_sym,
++                        "top_weight": float(top_w),
++                        "weights": {k: float(v) for k, v in sorted(weights.items(), key=lambda kv: kv[1], reverse=True)[:8]},
++                    },
++                )
++            )
++
++        # 3b) Moneda (exposición por currency del Asset)
++        currency_values: Dict[str, Decimal] = {}
++        for sym, v in values.items():
++            cur = (prices.get(sym, {}).get("currency") or "?").upper()
++            currency_values[cur] = currency_values.get(cur, Decimal("0")) + v
++
++        base = (getattr(portfolio, "base_currency", "ARS") or "ARS").upper()
++        # Si hay exposición relevante a monedas distintas de la base
++        other = {cur: val for cur, val in currency_values.items() if cur and cur != base}
++        if other:
++            # top other currency
++            top_cur = max(other, key=lambda c: other[c])
++            w = other[top_cur] / total
++            if w >= Decimal("0.25"):
++                recos.append(
++                    RecoDef(
++                        code=f"FX-{top_cur}-{portfolio.id}",
++                        severity=Recommendation.Severity.MED,
++                        title=f"Exposición relevante a moneda {top_cur} ({(w*100):.1f}%)",
++                        rationale=(
++                            f"Tu portafolio base está en {base}, pero una parte importante está valuada en {top_cur}. "
++                            "Esto puede ser intencional (cobertura) o un riesgo adicional (tipo de cambio). "
++                            "Acción sugerida: revisar si esta exposición es deseada y si tenés un rango objetivo."
++                        ),
++                        evidence={
++                            "tipo": "moneda",
++                            "base_currency": base,
++                            "currency_weights": {k: float(v / total) for k, v in currency_values.items()},
++                        },
++                    )
++                )
++
++        # 3c) Precios viejos
++        if stale:
++            stale_sorted = sorted(stale, key=lambda x: x["age_days"], reverse=True)
++            recos.append(
++                RecoDef(
++                    code=f"PRICES-STALE-{portfolio.id}",
++                    severity=Recommendation.Severity.LOW,
++                    title="Hay precios históricos desactualizados (más de 14 días)",
++                    rationale=(
++                        "Para que los cálculos y el ranking PRO sean representativos, conviene actualizar históricos "
++                        "cuando hay huecos o datos viejos. Podés volver a subir el CSV del símbolo o completar fechas faltantes."
++                    ),
++                    evidence={"tipo": "precios", "stale": stale_sorted[:10]},
++                )
++            )
++
++        # 3d) Muchas posiciones pequeñas
++        small = [sym for sym, w in weights.items() if w < Decimal("0.01")]
++        if len(symbols) >= 10 and len(small) >= 5:
++            recos.append(
++                RecoDef(
++                    code=f"CLEANUP-SMALL-{portfolio.id}",
++                    severity=Recommendation.Severity.LOW,
++                    title="Muchas posiciones muy pequeñas (<1%)",
++                    rationale=(
++                        "Tenés varias posiciones que pesan menos del 1% cada una. Esto puede complicar el seguimiento sin aportar mucho impacto. "
++                        "Acción sugerida: revisar si conviene simplificar (consolidar) o si forman parte de una estrategia diversificada." 
++                    ),
++                    evidence={"tipo": "estructura", "small_positions": small[:20], "count": len(small)},
++                )
++            )
++
++    return recos, ""
++
++
++def generate_recommendations(panel) -> RecoGenerationResult:
++    """Genera oportunidades para un portafolio.
++
++    `panel` se usa como nombre histórico; es un Portfolio.
++    """
++
++    recos, reason_if_empty = build_recos(panel)
++
++    if not recos:
++        return RecoGenerationResult(created=0, reason=reason_if_empty or "No se encontraron condiciones para generar oportunidades.")
++
++    created = 0
++    for r in recos:
++        _, ok = _create_reco_safe(
++            portfolio=panel,
++            code=r.code,
++            severity=r.severity,
++            title=r.title,
++            rationale=r.rationale,
++            evidence=r.evidence,
++            status=Recommendation.Status.OPEN,
++        )
++        if ok:
++            created += 1
++
++    if created == 0:
++        # lo más común es que ya existan OPEN con los mismos códigos
++        return RecoGenerationResult(
++            created=0,
++            reason="No se generaron nuevas oportunidades (probablemente ya existían oportunidades OPEN iguales).",
++        )
+ 
+-    if callable(build_recos):
+-        recos = build_recos(panel)
+-        with transaction.atomic():
+-            for r in recos:
+-                _create_reco_safe(**r)
+-                created += 1
+-        return created
+-
+-    # Fallback: if previous code lived below, keep it and just swap the create call.
+-    # If no recommendations are generated, return 0.
+-    return created
++    return RecoGenerationResult(created=created, reason="")
+
+--- a/core/views.py
++++ b/core/views.py
+@@ -117,7 +117,8 @@
+     )
+     snap = {}
+     for sym in symbols[:50]:
+-        p = AssetPrice.objects.filter(symbol=sym).order_by("-date").first()
++        # AssetPrice referencia Asset por FK (no hay campo symbol directo)
++        p = AssetPrice.objects.filter(asset__symbol=sym).order_by("-date").first()
+         if p:
+             snap[sym] = {"date": str(p.date), "close": float(p.close)}
+     return snap
+@@ -167,7 +168,8 @@
+ def portfolio_detail(request, portfolio_id: int):
+     portfolio = get_object_or_404(Portfolio, id=portfolio_id, owner=request.user)
+ 
+-    tx_qs = Transaction.objects.filter(portfolio=portfolio).order_by("-date", "-id")
++    # Campo correcto: tx_date
++    tx_qs = Transaction.objects.filter(portfolio=portfolio).order_by("-tx_date", "-id")
+     tx_form = TransactionForm(request.POST or None)
+ 
+     if request.method == "POST" and tx_form.is_valid():
+@@ -545,9 +547,18 @@
+         # Generar oportunidades a partir del motor (si hay portafolio)
+         if action == "generate":
+             p = _get_or_create_default_portfolio(request.user)
+-            created = generate_recommendations(p)
+-            _audit(request, "reco_generate", {"portfolio_id": p.id, "created": created})
+-            messages.success(request, f"Oportunidades generadas: {created}.")
++            res = generate_recommendations(p)
++            # Compatibilidad: puede ser int (legacy) o un objeto con created/reason
++            created = int(getattr(res, "created", res))
++            reason = str(getattr(res, "reason", "") or "")
++
++            _audit(request, "reco_generate", {"portfolio_id": p.id, "created": created, "reason": reason})
++
++            if created > 0:
++                messages.success(request, f"Oportunidades generadas: {created}.")
++            else:
++                extra = f" {reason}" if reason else ""
++                messages.info(request, f"Oportunidades generadas: 0.{extra}")
+             return redirect("core:opportunities")
+ 
+         # Generar DEMO (sin depender de holdings)
+@@ -572,7 +583,7 @@
+ 
+             created = 0
+             for code, sev, title, rationale, evidence in demo_defs:
+-                _create_reco_safe(
++                _, ok = _create_reco_safe(
+                     portfolio=p,
+                     code=f"{code}-{p.id}",
+                     severity=sev,
+@@ -581,7 +592,8 @@
+                     evidence=evidence,
+                     status=Recommendation.Status.OPEN,
+                 )
+-                created += 1
++                if ok:
++                    created += 1
+ 
+             _audit(request, "reco_demo_seed", {"portfolio_id": p.id, "created": created})
+             messages.success(request, f"Se generaron {created} oportunidades DEMO.")
+@@ -824,131 +836,108 @@
+ 
+ 
+ def _manual_sections():
+-    # Manual operativo (Rev 7) — orientado a usuario final, muy narrado y paso a paso.
+-    # Nota: se mantiene como "secciones + lista" para que sirva tanto en HTML como en PDF.
++    # Manual operativo (Rev 9) — pensado para uso real, con procedimientos por botón.
++    # Formato: secciones + bullets (sirve para HTML y PDF).
+     return [
+         ("1) Qué es InvPanel PRO (y qué NO es)", [
+-            "InvPanel PRO es un panel web personal para llevar tu portafolio y registrar decisiones sobre oportunidades (recomendaciones).",
+-            "Está pensado para usarse desde PC o desde el celular como app (PWA: se instala como ícono en la pantalla de inicio).",
+-            "MUY IMPORTANTE: el sistema NO compra ni vende en ningún broker. No mueve dinero. Solo organiza información, estados y decisiones.",
+-            "Cómo pensarlo: es un tablero + bitácora (registro) para que vos tengas orden y puedas revisar tu historial.",
++            "InvPanel PRO es un panel web personal para gestionar un portafolio y registrar decisiones sobre ‘Oportunidades’ (recomendaciones).",
++            "Se puede usar desde PC o desde el celular como ‘app’ (PWA: se instala como ícono).",
++            "MUY IMPORTANTE: el sistema NO compra ni vende en ningún broker. No mueve dinero. No toca tus cuentas. Solo registra información y estados.",
++            "Cómo pensarlo: tablero + bitácora (historial) para ordenar y justificar decisiones.",
+         ]),
+ 
+         ("2) Cómo entrar y cómo ubicarte (primer uso)", [
+             "Paso 1 — Entrar: abrí la URL del sistema y logueate con tu usuario y contraseña.",
+-            "Paso 2 — Mirar el menú superior: Panel · Portafolios · Activos · Oportunidades · Análisis (PRO) · Manual (y Test mail si sos admin).",
+-            "Paso 3 — Entender el badge rojo: si ves un número rojo en Oportunidades, significa que hay X oportunidades OPEN (pendientes).",
+-            "Paso 4 — Confirmar que las acciones funcionaron: cuando hacés algo bien, aparece un mensaje (caja verde). Si algo falla, caja roja.",
++            "Paso 2 — Menú superior: Panel · Portafolios · Activos · Oportunidades · Análisis (PRO) · Manual.",
++            "Paso 3 — Mensajes: después de tocar un botón, arriba aparece una caja (verde = OK, roja = error, azul = informativa).",
++            "Paso 4 — Numerito rojo: si aparece en ‘Oportunidades’, significa que hay oportunidades OPEN (pendientes).",
+         ]),
+ 
+-        ("3) Tu primera prueba guiada (5 minutos, recomendada)", [
+-            "Objetivo: que veas tarjetas, botones, badges y el flujo completo sin tener datos reales.",
++        ("3) Primera prueba guiada (sin datos reales)", [
++            "Objetivo: ver tarjetas, botones, numeritos y flujo completo sin depender de tu portafolio.",
+             "Paso 1: entrá a Oportunidades.",
+-            "Paso 2: tocá “Generar DEMO”.",
+-            "Qué deberías ver: (a) un mensaje verde “Se generaron 3 oportunidades DEMO”, (b) 3 tarjetas, (c) Abiertas (OPEN) = 3.",
+-            "Paso 3: en la primera tarjeta, escribí una nota (opcional) y tocá “Aceptar”.",
+-            "Qué deberías ver: mensaje verde de confirmación, la tarjeta desaparece del listado y el contador OPEN baja.",
+-            "Paso 4: en otra tarjeta tocá “Ignorar”.",
+-            "Qué deberías ver: mensaje verde, la tarjeta desaparece y OPEN baja.",
+-            "Paso 5: tocá “Base de datos” para ver el historial y verificar que quedaron ACCEPTED/IGNORED.",
+-        ]),
+-
+-        ("4) Pantalla Oportunidades: qué estás viendo", [
+-            "Esta pantalla es tu ‘inbox’ de oportunidades. Solo muestra las oportunidades en estado OPEN.",
+-            "Cuando aceptás o ignorás una oportunidad, deja de estar OPEN; por eso desaparece de la lista.",
+-            "Abiertas (OPEN): es el número de oportunidades pendientes. El badge rojo del menú muestra ese mismo valor.",
+-            "IA: si dice NO configurada, el sistema igual funciona, pero el botón ‘Evaluar con IA’ no completa el bloque IA.",
+-            "Gobernanza (si está ON): puede exigir un score mínimo para permitir ciertas acciones cuando IA está activa.",
+-        ]),
+-
+-        ("5) Oportunidades: botones de arriba (qué hace cada uno)", [
+-            "Botón “Generar DEMO”: crea 3 oportunidades de prueba. Se usa para aprender el sistema. Esperá ver 3 tarjetas demo.",
+-            "Botón “Generar”: intenta generar oportunidades a partir de tu portafolio. Si tu portafolio está vacío o incompleto, puede generar 0.",
+-            "Botón “Evaluar con IA”: toma las oportunidades OPEN y completa el bloque IA (score, confianza, acción y resumen). Requiere IA configurada.",
+-            "Botón “Base de datos”: abre el historial completo (OPEN + cerradas). Sirve para buscar, auditar y filtrar.",
+-        ]),
+-
+-        ("6) Oportunidades: dentro de cada tarjeta (qué tocar y qué esperar)", [
+-            "Bloque ‘IA’: si todavía no corriste IA, dice ‘Sin evaluación IA todavía’. Si corrés IA, vas a ver score, confianza, acción y un resumen.",
+-            "‘Ver evidencia’: abre datos asociados a la oportunidad (por qué existe). En DEMO es texto de ejemplo; en real puede ser más técnico.",
+-            "‘Nota (opcional)’: escribí una justificación simple (por qué aceptás o por qué ignorás). Esto queda guardado en el historial.",
+-            "Botón “Aceptar”: cambia el estado a ACCEPTED. La tarjeta desaparece (porque ya no es OPEN). El badge rojo baja.",
+-            "Botón “Ignorar”: cambia el estado a IGNORED. La tarjeta desaparece y el badge rojo baja.",
++            "Paso 2: tocá ‘Generar DEMO’.",
++            "Qué deberías ver: mensaje verde + 3 tarjetas + OPEN=3.",
++            "Paso 3: en una tarjeta, opcionalmente escribí una nota y tocá ‘Aceptar’.",
++            "Qué deberías ver: mensaje verde, la tarjeta desaparece (deja de ser OPEN) y el numerito rojo baja.",
++            "Paso 4: en otra tarjeta tocá ‘Ignorar’.",
++            "Paso 5: tocá ‘Base de datos’ para ver el historial y verificar estados ACCEPTED / IGNORED.",
+         ]),
+ 
+-        ("7) Base de datos: cómo usar el historial", [
+-            "Entrá a Oportunidades → Base de datos.",
+-            "Qué vas a ver: una tabla con todas las oportunidades (abiertas y cerradas), con filtros y búsqueda.",
+-            "Cómo buscar: escribí un texto (título, código, etc.) y aplicá filtros por estado (OPEN/ACCEPTED/IGNORED).",
+-            "Cómo auditar: abrí una oportunidad para ver su detalle, evidencia y nota asociada.",
+-            "Si algo ‘desaparece’ de Oportunidades: no se perdió; se movió al historial al cambiar de estado.",
++        ("4) Pantalla Oportunidades — qué estás viendo", [
++            "Esta pantalla es tu ‘inbox’. Solo muestra oportunidades en estado OPEN.",
++            "‘Abiertas (OPEN)’: cuántas oportunidades te quedan pendientes.",
++            "Bloque IA: si IA está configurada, puede completar score/resumen. Si NO está configurada, el sistema funciona igual.",
+         ]),
+ 
+-        ("8) Portafolios: crear uno y dejarlo listo", [
+-            "Un portafolio es un contenedor lógico (por ejemplo: ‘Mi Portafolio’, ‘Conservador’, ‘Agresivo’).",
+-            "Paso a paso: Portafolios → Crear nuevo → poné nombre → guardar.",
+-            "Luego entrá al portafolio: cargá posiciones/movimientos si el sistema lo solicita (según el flujo disponible en tu versión).",
+-            "Importante: el botón ‘Generar’ en Oportunidades depende de que el portafolio tenga datos suficientes.",
++        ("5) Botones de Oportunidades — procedimiento paso a paso", [
++            "Botón ‘Generar DEMO’ (aprender):",
++            "  1) Tocá ‘Generar DEMO’.",
++            "  2) Esperá que la página recargue sola.",
++            "  3) Confirmá: mensaje verde + tarjetas demo + OPEN aumenta.",
++            "  4) Si no genera DEMO: suele ser porque ya tenías oportunidades OPEN (no duplica).",
++            "Botón ‘Generar’ (motor real):",
++            "  1) Tocá ‘Generar’.",
++            "  2) Esperá recarga y mirá el mensaje.",
++            "  3) Si genera >0: aparecen nuevas tarjetas OPEN.",
++            "  4) Si genera 0: el sistema muestra una explicación (portafolio vacío, sin holdings, faltan precios, o ya existían oportunidades iguales).",
++            "Botón ‘Evaluar con IA’ (opcional):",
++            "  1) Solo sirve si IA figura como ‘configurada’.",
++            "  2) Tocá ‘Evaluar con IA’ → recarga → se completa el bloque IA en cada tarjeta.",
++            "Botón ‘Base de datos’ (historial):",
++            "  1) Entrá para ver todo (OPEN + cerradas).",
++            "  2) Usá filtros por estado y buscador por texto.",
+         ]),
+ 
+-        ("9) Activos: por qué existe esta pantalla", [
+-            "Activos es tu catálogo (lista) de instrumentos/símbolos. Sirve para: (a) organizar el portafolio, (b) elegir un asset al cargar CSV.",
+-            "Si en ‘Cargar precios (CSV)’ el combo Asset aparece vacío: te falta crear al menos un activo.",
+-            "Paso a paso: Activos → Agregar → completar símbolo/nombre/tipo/moneda → guardar.",
++        ("6) Botones dentro de una tarjeta — qué tocar y qué esperar", [
++            "‘Ver evidencia’: abre los datos que justifican la oportunidad.",
++            "‘Nota (opcional)’: escribí tu criterio. Queda guardado en el historial.",
++            "‘Aceptar’: pasa a ACCEPTED. Desaparece de OPEN. Baja el numerito rojo.",
++            "‘Ignorar’: pasa a IGNORED. Desaparece de OPEN. Baja el numerito rojo.",
+         ]),
+ 
+-        ("10) Análisis (PRO): qué hace y cuándo se usa", [
+-            "Análisis (PRO) arma métricas a partir de históricos de precios que cargás vos.",
+-            "Si no cargaste CSV todavía, es normal que la pantalla se vea sin ranking o con pocos datos.",
+-            "Ventana (window): a veces vas a ver un parámetro como window=90. Significa que el análisis se hace sobre los últimos 90 días disponibles.",
++        ("7) Cómo funciona el motor ‘Generar’ (reglas simples)", [
++            "El motor ‘Generar’ usa reglas simples y auditables (rápidas, no ‘finanzas complejas’).",
++            "Reglas típicas: concentración (una posición muy grande), exposición por moneda, faltan precios históricos, precios desactualizados, muchas posiciones pequeñas.",
++            "Si apretás ‘Generar’ varias veces: no debería duplicar oportunidades iguales; por eso a veces devuelve 0.",
+         ]),
+ 
+-        ("11) Cargar precios (CSV): guía paso a paso (muy importante)", [
+-            "Esta pantalla NO tiene relación con ‘Generar DEMO’. Es parte de Análisis (PRO).",
+-            "Caso A — CSV para 1 activo (más simple):",
+-            "  A1) Entrá a Análisis (PRO) → Cargar precios (CSV).",
+-            "  A2) Elegí el Asset en el combo.",
+-            "  A3) Seleccioná un archivo CSV con columnas date,close (o fecha,precio).",
+-            "  A4) Tocá ‘Subir y procesar’.",
+-            "  A5) Esperá un mensaje verde con el resultado (nuevos/actualizados/omitidos).",
+-            "  A6) Volvé a Análisis y verificá que el ranking aparezca.",
+-            "Caso B — CSV multi-activo:",
+-            "  B1) Subí un CSV con columnas date,symbol,close.",
+-            "  B2) El sistema interpreta el símbolo y asigna a cada activo.",
+-            "Si algo falla: revisá separador (coma o punto y coma) y formato de fecha.",
++        ("8) Portafolios — dejar el portafolio listo", [
++            "Paso 1: Portafolios → Crear nuevo → nombre → Guardar.",
++            "Paso 2: Cargar transacciones BUY/SELL (movimientos).",
++            "Paso 3 (recomendado): Cargar precios históricos (CSV) para calcular porcentajes y concentración.",
+         ]),
+ 
+-        ("12) Simulator (entrenamiento)", [
+-            "El Simulator es un modo de prueba/entrenamiento para simular movimientos y ver cómo se reflejan.",
+-            "Uso típico: Panel → Simulator → crear simulación → cargar movimientos → avanzar días.",
++        ("9) Activos — catálogo de símbolos", [
++            "Activos es tu catálogo de instrumentos/símbolos (para portafolio y para cargar CSV).",
++            "Si al cargar precios el combo Asset está vacío: creá al menos un Activo.",
++            "Paso a paso: Activos → Agregar → símbolo/nombre/tipo/moneda → Guardar.",
+         ]),
+ 
+-        ("13) Test mail (solo admin)", [
+-            "Si sos admin, vas a ver ‘Test mail’. Sirve para verificar si el envío de emails está bien configurado.",
+-            "Si no sos admin, no aparece. No es un error.",
++        ("10) Análisis (PRO) y carga de precios (CSV)", [
++            "Análisis (PRO) calcula métricas usando históricos de precios que cargás por CSV.",
++            "Caso simple (1 símbolo): Análisis (PRO) → Cargar precios → elegir Asset → subir CSV date,close → procesar.",
++            "Caso multi-símbolo: CSV date,symbol,close.",
+         ]),
+ 
+-        ("14) Instalar como app (PWA) en iPhone/Android", [
+-            "iPhone: abrir en Safari → botón Compartir → ‘Agregar a inicio’.",
+-            "Android: abrir en Chrome → menú ⋮ → ‘Agregar a pantalla principal’ o ‘Instalar app’.",
+-            "Si ves pantalla blanca: cerrá sesión, borrá datos del sitio y reinstalá el acceso.",
++        ("11) Ícono tipo app (PWA) y numeritos rojos en el ícono", [
++            "El numerito rojo dentro de la app (menú Oportunidades) es el indicador confiable.",
++            "El numerito en el ÍCONO de la app depende del sistema/navegador. Suele funcionar mejor en Android/Chrome. En iPhone puede no aparecer aunque todo esté bien.",
+         ]),
+ 
+-        ("15) Problemas comunes (Troubleshooting)", [
+-            "Al presionar un botón no pasa nada: mirá arriba si apareció un mensaje (verde/rojo). Si no, recargá la página.",
+-            "‘Error cliente’: suele ser un problema de CSRF o dominio no confiable. Verificá CSRF_TRUSTED_ORIGINS y que navegás por https.",
+-            "Logout no funciona: el botón ‘Salir’ funciona por POST (seguridad). Si escribís /logout/ en el navegador, puede dar 405.",
+-            "Badge no se actualiza: el sistema refresca cada 30 segundos; también podés recargar.",
+-            "Render ‘No open HTTP ports’: el health check debe apuntar a /healthz/.",
+-            "La IA no evalúa: falta OPENAI_API_KEY o está mal escrita en Render.",
++        ("12) Problemas comunes (Troubleshooting)", [
++            "Pantalla en blanco: suele ser cache del Service Worker. Solución: borrar datos del sitio (cache/storage) y recargar; o reinstalar la PWA.",
++            "‘Error cliente’ al tocar botones: suele ser CSRF / dominios. Revisá ALLOWED_HOSTS y CSRF_TRUSTED_ORIGINS en Render.",
++            "‘Generar’ devuelve 0: mirá el mensaje informativo: portafolio vacío, sin holdings, faltan precios o ya existían oportunidades iguales.",
++            "Render ‘No open HTTP ports’: health check en /healthz/.",
+         ]),
+ 
+-        ("16) Checklist de Render (variables recomendadas)", [
+-            "ALLOWED_HOSTS: incluir invpanel-pro.onrender.com (y tu dominio propio si lo tenés).",
+-            "CSRF_TRUSTED_ORIGINS: incluir https://invpanel-pro.onrender.com (y https://tudominio si corresponde).",
++        ("13) Checklist de Render (variables recomendadas)", [
++            "ALLOWED_HOSTS: invpanel-pro.onrender.com (y tu dominio propio si lo tenés).",
++            "CSRF_TRUSTED_ORIGINS: https://invpanel-pro.onrender.com (y https://tudominio si corresponde).",
+             "OPENAI_API_KEY (opcional): solo si querés IA.",
+             "SECRET_KEY: obligatorio.",
+-            "ADMIN_USERNAME/ADMIN_PASSWORD/ADMIN_EMAIL: para el usuario admin inicial.",
++            "ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_EMAIL: para el usuario admin inicial.",
+         ]),
+     ]
+ 
+@@ -994,7 +983,7 @@
+     body.spaceAfter = 6
+ 
+     story = [
+-        Paragraph("Manual de Operación — InvPanel PRO (Rev 7)", h1),
++        Paragraph("Manual de Operación — InvPanel PRO (Rev 9)", h1),
+         Paragraph(f"Generado: {timezone.now().strftime('%Y-%m-%d %H:%M')}", body),
+         Spacer(1, 12),
+     ]
+
+--- a/templates/base.html
++++ b/templates/base.html
+@@ -69,7 +69,7 @@
+   <div class="inner">
+     <a class="brand" href="/">
+       <span class="logo"></span>
+-      <span class="title">InvPanel PRO <span style="font-weight:700; font-size:12px; opacity:.8;">Rev 8</span></span>
++      <span class="title">InvPanel PRO <span style="font-weight:700; font-size:12px; opacity:.8;">Rev 9</span></span>
+     </a>
+ 
+     <nav class="nav">
+
+--- a/templates/core/manual.html
++++ b/templates/core/manual.html
+@@ -5,7 +5,7 @@
+ <div class="card">
+   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+     <div>
+-      <h2 style="margin:0;">Manual de operación (Rev 7)</h2>
++      <h2 style="margin:0;">Manual de operación (Rev 9)</h2>
+       <div class="muted">Guía narrada y paso a paso. Solo accesible con login.</div>
+     </div>
+     <a class="btn btn-primary" href="/manual/pdf/">Descargar PDF</a>
+
+--- a/core/static/pwa/sw.js
++++ b/core/static/pwa/sw.js
+@@ -1,8 +1,8 @@
+-/* InvPanel PRO - Service Worker (v10)
++/* InvPanel PRO - Service Worker (v11)
+    Cache básico para assets estáticos. Evita fallos si una URL no existe.
+ */
+ 
+-const CACHE_NAME = "invpanel-static-v10";
++const CACHE_NAME = "invpanel-static-v11";
+ const PRECACHE_URLS = [
+   "/static/css/base.css",
+   "/static/icons/icon-192.png",
+
+--- a/VERSION.txt
++++ b/VERSION.txt
+@@ -1 +1 @@
+-v11.0-full (render port-scan + start.sh)
++v11.9-full (reco engine real + manual Rev 9 + fixes price snapshot + SW v11)
+
+--- a/README_APLICAR_PARChe.txt
++++ b/README_APLICAR_PARChe.txt
+@@ -1,23 +1,27 @@
+-PARCHE v11.7 — Manual narrado + Logout seguro (POST) + PWA sin warnings (Render)
++PARCHE v11.9 — Motor REAL de oportunidades + Manual Rev 9 + fixes + SW cache bump
+ 
+ Qué agrega / arregla:
+-- Manual mucho más narrado y operativo (paso a paso por pantalla y botones).
+-- “Salir / Logout” pasa a ser POST (seguridad). Evita el 405 cuando el usuario hace click desde el menú.
+-- PWA assets (sw.js / manifest) se sirven como bytes para evitar warnings ruidosos en logs ASGI.
++- Botón “Generar” ahora crea oportunidades REALES con reglas simples y auditables:
++  concentración / moneda / faltan precios / precios desactualizados / estructura del portafolio.
++- Mejor mensaje cuando “Generar” devuelve 0 (evita confusión por múltiples recargas).
++- Fix bug: snapshot de precios usaba AssetPrice.filter(symbol=...) (inexistente) → ahora usa asset__symbol.
++- Fix bug: orden de transacciones en portafolio (campo correcto tx_date).
++- Manual narrado actualizado (Rev 9).
++- Service Worker cache bump (v11) para reducir problemas de “pantalla blanca” por cache.
+ 
+ Archivos tocados:
++- core/reco_engine.py
++- core/views.py
+ - templates/base.html
+-- templates/core/opportunities.html
+ - templates/core/manual.html
+-- core/views.py
+-- core/pwa_views.py
++- core/static/pwa/sw.js
+ 
+ Cómo aplicar (Git):
+-1) Copiá este ZIP a tu PC y descomprimilo.
++1) Copiá el ZIP de parches a tu PC y descomprimilo.
+ 2) En la carpeta del repo:
+-   git apply 0002-rev7-manual-logout-pwa.patch
++   git apply 0001-v11_9-reco-engine-and-manual.patch
+ 3) Commit + push
+ 4) En Render: Clear build cache + Deploy
+ 
+ Si NO usás git apply:
+-- Aplicá los cambios manualmente en los 5 archivos listados arriba.
++- Aplicá los cambios manualmente en los archivos listados arriba.
+
+--- a/PATCH_NOTES_v11_9.md
++++ b/PATCH_NOTES_v11_9.md
+@@ -0,0 +1,32 @@
++# InvPanel PRO — Patch Notes v11.9 (2026-02-23)
++
++## Cambios principales
++
++### 1) Motor REAL de oportunidades (“Generar”)
++- Se implementó un motor basado en **reglas simples y auditables**:
++  - **Concentración** (posición dominante)
++  - **Exposición por moneda**
++  - **Faltan precios históricos**
++  - **Precios desactualizados** (> 14 días)
++  - **Muchas posiciones pequeñas**
++  - **Calidad de datos** (posición neta negativa por ventas > compras)
++- El motor evita duplicar oportunidades iguales (no genera repetidos OPEN).
++
++### 2) Mensajes y UX
++- Si “Generar” devuelve 0, ahora muestra un **mensaje informativo** con la causa más probable.
++
++### 3) Fixes técnicos
++- Fix: Snapshot de precios usaba `AssetPrice.objects.filter(symbol=...)` → **correcto** `asset__symbol`.
++- Fix: Orden de transacciones en `portfolio_detail` usaba `date` → **correcto** `tx_date`.
++- Service Worker: bump `invpanel-static-v10` → `invpanel-static-v11` para forzar recarga de cache.
++
++### 4) Manual
++- Manual narrado actualizado a **Rev 9**.
++
++## Archivos modificados
++- `core/reco_engine.py`
++- `core/views.py`
++- `templates/base.html`
++- `templates/core/manual.html`
++- `core/static/pwa/sw.js`
++- `VERSION.txt`
+
