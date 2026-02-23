@@ -88,7 +88,7 @@ class Recommendation(TimeStamped):
 # --- IA (evaluación y gobernanza) ---
 ai_score = models.IntegerField(null=True, blank=True)
 ai_confidence = models.IntegerField(null=True, blank=True)
-ai_action = models.CharField(max_length=12, blank=True)
+    ai_action = models.CharField(max_length=12, blank=True, default="HOLD")  # v11.1 patch: default to avoid NULL
 ai_summary = models.TextField(blank=True)
 ai_reasons = models.JSONField(default=dict, blank=True)
 ai_evaluated_at = models.DateTimeField(null=True, blank=True)
