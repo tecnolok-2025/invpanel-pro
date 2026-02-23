@@ -45,7 +45,7 @@ from .models import (
     Simulation,
     Transaction,
 )
-from .reco_engine import generate_recommendations
+from .reco_engine import generate_recommendations, _create_reco_safe
 from .stats_engine import rank_assets
 from .ai_engine import evaluate_recommendation
 
@@ -560,7 +560,7 @@ def opportunities(request):
 
             created = 0
             for code, sev, title, rationale, evidence in demo_defs:
-                Recommendation.objects.create(
+                _create_reco_safe(
                     portfolio=p,
                     code=f"{code}-{p.id}",
                     severity=sev,
