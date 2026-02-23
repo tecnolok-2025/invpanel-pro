@@ -1,20 +1,23 @@
-PARCHE v11.6 — Fix DEMO + schema-safe ai_summary/ai_action (Render)
+PARCHE v11.7 — Manual narrado + Logout seguro (POST) + PWA sin warnings (Render)
 
-Qué arregla:
-- Evita IntegrityError NOT NULL (ai_summary / ai_action) al crear oportunidades DEMO.
-- Hace create() "defensivo" frente a desfasajes entre código y esquema (DB).
+Qué agrega / arregla:
+- Manual mucho más narrado y operativo (paso a paso por pantalla y botones).
+- “Salir / Logout” pasa a ser POST (seguridad). Evita el 405 cuando el usuario hace click desde el menú.
+- PWA assets (sw.js / manifest) se sirven como bytes para evitar warnings ruidosos en logs ASGI.
 
 Archivos tocados:
-- core/reco_engine.py  (exporta create_reco_safe, usa concrete_fields)
-- core/views.py        (DEMO usa create_reco_safe + defaults)
+- templates/base.html
+- templates/core/opportunities.html
+- templates/core/manual.html
+- core/views.py
+- core/pwa_views.py
 
 Cómo aplicar (Git):
 1) Copiá este ZIP a tu PC y descomprimilo.
 2) En la carpeta del repo:
-   git apply 0001-demo-schema-safe.patch
+   git apply 0002-rev7-manual-logout-pwa.patch
 3) Commit + push
 4) En Render: Clear build cache + Deploy
 
 Si NO usás git apply:
-- Abrí core/reco_engine.py y pegá la función create_reco_safe como en el patch.
-- En views.py, en el bloque DEMO, agregá ai_action y ai_summary o llamá create_reco_safe.
+- Aplicá los cambios manualmente en los 5 archivos listados arriba.

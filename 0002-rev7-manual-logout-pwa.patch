@@ -1,0 +1,361 @@
+diff -ruN work_invpanel6_base/INSTRUCCIONES_RENDER_DASHBOARD.md work_invpanel7/INSTRUCCIONES_RENDER_DASHBOARD.md
+--- work_invpanel6_base/INSTRUCCIONES_RENDER_DASHBOARD.md	2026-02-23 13:47:08.000000000 +0000
++++ work_invpanel7/INSTRUCCIONES_RENDER_DASHBOARD.md	2026-02-23 17:08:29.407245666 +0000
+@@ -39,6 +39,10 @@
+ - `CSRF_TRUSTED_ORIGINS` = `https://tudominio.com,https://www.tudominio.com,https://tu-app.onrender.com`
+   - Si esto está mal, botones con POST (por ejemplo **Generar DEMO**) pueden fallar y vas a ver un “error cliente” o que “no pasa nada”.
+ 
++Ejemplo (si tu servicio se llama invpanel-pro):
++- `ALLOWED_HOSTS` = `invpanel-pro.onrender.com`
++- `CSRF_TRUSTED_ORIGINS` = `https://invpanel-pro.onrender.com`
++
+ Push Notifications (si querés activarlas):
+ - `VAPID_PUBLIC_KEY`
+ - `VAPID_PRIVATE_KEY_PEM_B64`
+diff -ruN work_invpanel6_base/README_APLICAR_PARChe.txt work_invpanel7/README_APLICAR_PARChe.txt
+--- work_invpanel6_base/README_APLICAR_PARChe.txt	2026-02-23 13:37:10.000000000 +0000
++++ work_invpanel7/README_APLICAR_PARChe.txt	2026-02-23 17:07:45.061484627 +0000
+@@ -1,20 +1,23 @@
+-PARCHE v11.6 — Fix DEMO + schema-safe ai_summary/ai_action (Render)
++PARCHE v11.7 — Manual narrado + Logout seguro (POST) + PWA sin warnings (Render)
+ 
+-Qué arregla:
+-- Evita IntegrityError NOT NULL (ai_summary / ai_action) al crear oportunidades DEMO.
+-- Hace create() "defensivo" frente a desfasajes entre código y esquema (DB).
++Qué agrega / arregla:
++- Manual mucho más narrado y operativo (paso a paso por pantalla y botones).
++- “Salir / Logout” pasa a ser POST (seguridad). Evita el 405 cuando el usuario hace click desde el menú.
++- PWA assets (sw.js / manifest) se sirven como bytes para evitar warnings ruidosos en logs ASGI.
+ 
+ Archivos tocados:
+-- core/reco_engine.py  (exporta create_reco_safe, usa concrete_fields)
+-- core/views.py        (DEMO usa create_reco_safe + defaults)
++- templates/base.html
++- templates/core/opportunities.html
++- templates/core/manual.html
++- core/views.py
++- core/pwa_views.py
+ 
+ Cómo aplicar (Git):
+ 1) Copiá este ZIP a tu PC y descomprimilo.
+ 2) En la carpeta del repo:
+-   git apply 0001-demo-schema-safe.patch
++   git apply 0002-rev7-manual-logout-pwa.patch
+ 3) Commit + push
+ 4) En Render: Clear build cache + Deploy
+ 
+ Si NO usás git apply:
+-- Abrí core/reco_engine.py y pegá la función create_reco_safe como en el patch.
+-- En views.py, en el bloque DEMO, agregá ai_action y ai_summary o llamá create_reco_safe.
++- Aplicá los cambios manualmente en los 5 archivos listados arriba.
+diff -ruN work_invpanel6_base/core/pwa_views.py work_invpanel7/core/pwa_views.py
+--- work_invpanel6_base/core/pwa_views.py	2026-02-23 13:37:10.000000000 +0000
++++ work_invpanel7/core/pwa_views.py	2026-02-23 17:00:07.694679640 +0000
+@@ -1,20 +1,24 @@
+ from pathlib import Path
+ 
+ from django.conf import settings
+-from django.http import FileResponse, HttpResponse
++from django.http import HttpResponse
+ 
+ 
+ def _file_response(path: Path, content_type: str) -> HttpResponse:
+     """Serve small static PWA files from disk without template rendering.
+ 
+-    This avoids running template context processors for /sw.js and /manifest.webmanifest,
+-    which can otherwise break PWA startup when a context processor raises.
++    Why HttpResponse(bytes) and not FileResponse?
++    - Under ASGI, FileResponse is implemented as a StreamingHttpResponse and may emit
++      warnings about consuming synchronous iterators.
++    - These PWA assets are tiny, so reading them fully is safe and avoids noisy logs.
+     """
+     if not path.exists():
+         return HttpResponse("Not found", status=404)
+-    resp = FileResponse(open(path, "rb"), content_type=content_type)
++
++    data = path.read_bytes()
++    resp = HttpResponse(data, content_type=content_type)
+     # Prevent aggressive caching so mobile clients pick up SW/manifest updates quickly
+-    resp['Cache-Control'] = 'no-cache'
++    resp["Cache-Control"] = "no-cache"
+     return resp
+ 
+ 
+diff -ruN work_invpanel6_base/core/views.py work_invpanel7/core/views.py
+--- work_invpanel6_base/core/views.py	2026-02-23 13:45:40.000000000 +0000
++++ work_invpanel7/core/views.py	2026-02-23 17:06:32.977867316 +0000
+@@ -812,63 +812,131 @@
+ 
+ 
+ def _manual_sections():
+-    # Manual operativo (orientado a usuario, narrado y paso a paso)
++    # Manual operativo (Rev 7) — orientado a usuario final, muy narrado y paso a paso.
++    # Nota: se mantiene como "secciones + lista" para que sirva tanto en HTML como en PDF.
+     return [
+-        ("Qué es y para qué sirve", [
+-            "InvPanel PRO es un panel web personal para gestionar un portafolio y registrar decisiones sobre oportunidades (recomendaciones).",
++        ("1) Qué es InvPanel PRO (y qué NO es)", [
++            "InvPanel PRO es un panel web personal para llevar tu portafolio y registrar decisiones sobre oportunidades (recomendaciones).",
+             "Está pensado para usarse desde PC o desde el celular como app (PWA: se instala como ícono en la pantalla de inicio).",
+-            "Importante: el sistema no compra/vende en ningún broker. Solo registra información y estados para tu análisis y tu decisión.",
++            "MUY IMPORTANTE: el sistema NO compra ni vende en ningún broker. No mueve dinero. Solo organiza información, estados y decisiones.",
++            "Cómo pensarlo: es un tablero + bitácora (registro) para que vos tengas orden y puedas revisar tu historial.",
+         ]),
+-        ("Cómo entrar y orientarte (primer uso)", [
+-            "1) Abrí la URL del sistema y entrá con tu usuario y contraseña.",
+-            "2) Mirá el menú superior: vas a ver accesos a Portafolio, Oportunidades, Históricos y Manual.",
+-            "3) Si aparece un número rojo (badge) en Oportunidades, significa que hay oportunidades abiertas pendientes (estado OPEN).",
+-            "Tip: cuando haces una acción correcta, el sistema muestra un mensaje en pantalla (caja verde o roja).",
+-        ]),
+-        ("Oportunidades: qué son", [
+-            "Una 'Oportunidad' es una recomendación registrada en el sistema para que la revises y tomes una decisión.",
+-            "Cada oportunidad tiene: título, severidad (Alta/Media/Baja), explicación (rationale) y evidencia (datos asociados).",
+-            "Estados principales: OPEN (abierta), ACCEPTED (aceptada), IGNORED (ignorada).",
+-        ]),
+-        ("Oportunidades: botones y qué hace cada uno", [
+-            "Generar DEMO: crea 3 oportunidades de prueba para que veas tarjetas, badges y el flujo completo.",
+-            "Aceptar: cambia una oportunidad a estado ACCEPTED (ya no cuenta como abierta).",
+-            "Ignorar: cambia una oportunidad a estado IGNORED (ya no cuenta como abierta).",
+-            "Evaluar con IA: si está configurada la IA, agrega un análisis adicional a las oportunidades abiertas (no es obligatorio).",
+-        ]),
+-        ("Cómo probar el sistema en 2 minutos (paso a paso)", [
+-            "1) Entrá a Oportunidades.",
+-            "2) Tocá el botón 'Generar DEMO'.",
+-            "3) Debe aparecer un mensaje verde diciendo cuántas oportunidades DEMO se generaron.",
+-            "4) Deben aparecer 3 tarjetas (Alta/Media/Baja).",
+-            "5) Probá 'Aceptar' en una tarjeta: el badge rojo debería bajar.",
+-            "6) Probá 'Ignorar' en otra tarjeta: el badge vuelve a bajar.",
+-            "Si no aparecen tarjetas después de Generar DEMO, revisá la sección Troubleshooting.",
+-        ]),
+-        ("Base de datos de Oportunidades (historial)", [
+-            "Entrá a Oportunidades → Base de datos para ver todas las oportunidades (abiertas y cerradas).",
+-            "Ahí podés filtrar por estado, buscar por texto y abrir una oportunidad para ver el detalle completo.",
+-            "Si necesitás volver a abrir una oportunidad, existe la acción 'Reabrir' (pasa a OPEN).",
+-        ]),
+-        ("Históricos (Análisis PRO)", [
+-            "Históricos te permite cargar y ver datos de precios o series históricas para análisis.",
+-            "Si cargás un CSV, debería aparecer en el listado y poder consultarse luego.",
+-            "Si no ves los datos, verificá el formato del CSV y que el upload haya finalizado.",
+-        ]),
+-        ("IA (opcional)", [
+-            "El botón 'Evaluar con IA' se habilita solo si existe la variable de entorno OPENAI_API_KEY.",
+-            "Si no está configurada, el sistema funciona igual: podés aceptar/ignorar manualmente.",
+-        ]),
+-        ("Instalar como app (PWA) en iPhone/Android", [
+-            "iPhone: abrir en Safari → botón Compartir → 'Agregar a inicio'.",
+-            "Android: abrir en Chrome → menú ⋮ → 'Agregar a pantalla principal' o 'Instalar app'.",
+-            "Si ves pantalla blanca en la PWA: borrá datos del sitio y reinstalá el acceso.",
+-        ]),
+-        ("Troubleshooting (problemas comunes)", [
+-            "Al presionar un botón no pasa nada / aparece 'Error cliente': suele ser un problema de CSRF o dominio no confiable. Revisá CSRF_TRUSTED_ORIGINS en Render.",
+-            "Mensaje de Render 'No open HTTP ports': configurar Health Check Path en /healthz/.",
+-            "No aparece el badge o no se actualiza: recargá la página; el badge se refresca cada 30 segundos automáticamente.",
+-            "La IA no evalúa: falta OPENAI_API_KEY o está mal escrita en variables de entorno.",
++
++        ("2) Cómo entrar y cómo ubicarte (primer uso)", [
++            "Paso 1 — Entrar: abrí la URL del sistema y logueate con tu usuario y contraseña.",
++            "Paso 2 — Mirar el menú superior: Panel · Portafolios · Activos · Oportunidades · Análisis (PRO) · Manual (y Test mail si sos admin).",
++            "Paso 3 — Entender el badge rojo: si ves un número rojo en Oportunidades, significa que hay X oportunidades OPEN (pendientes).",
++            "Paso 4 — Confirmar que las acciones funcionaron: cuando hacés algo bien, aparece un mensaje (caja verde). Si algo falla, caja roja.",
++        ]),
++
++        ("3) Tu primera prueba guiada (5 minutos, recomendada)", [
++            "Objetivo: que veas tarjetas, botones, badges y el flujo completo sin tener datos reales.",
++            "Paso 1: entrá a Oportunidades.",
++            "Paso 2: tocá “Generar DEMO”.",
++            "Qué deberías ver: (a) un mensaje verde “Se generaron 3 oportunidades DEMO”, (b) 3 tarjetas, (c) Abiertas (OPEN) = 3.",
++            "Paso 3: en la primera tarjeta, escribí una nota (opcional) y tocá “Aceptar”.",
++            "Qué deberías ver: mensaje verde de confirmación, la tarjeta desaparece del listado y el contador OPEN baja.",
++            "Paso 4: en otra tarjeta tocá “Ignorar”.",
++            "Qué deberías ver: mensaje verde, la tarjeta desaparece y OPEN baja.",
++            "Paso 5: tocá “Base de datos” para ver el historial y verificar que quedaron ACCEPTED/IGNORED.",
++        ]),
++
++        ("4) Pantalla Oportunidades: qué estás viendo", [
++            "Esta pantalla es tu ‘inbox’ de oportunidades. Solo muestra las oportunidades en estado OPEN.",
++            "Cuando aceptás o ignorás una oportunidad, deja de estar OPEN; por eso desaparece de la lista.",
++            "Abiertas (OPEN): es el número de oportunidades pendientes. El badge rojo del menú muestra ese mismo valor.",
++            "IA: si dice NO configurada, el sistema igual funciona, pero el botón ‘Evaluar con IA’ no completa el bloque IA.",
++            "Gobernanza (si está ON): puede exigir un score mínimo para permitir ciertas acciones cuando IA está activa.",
++        ]),
++
++        ("5) Oportunidades: botones de arriba (qué hace cada uno)", [
++            "Botón “Generar DEMO”: crea 3 oportunidades de prueba. Se usa para aprender el sistema. Esperá ver 3 tarjetas demo.",
++            "Botón “Generar”: intenta generar oportunidades a partir de tu portafolio. Si tu portafolio está vacío o incompleto, puede generar 0.",
++            "Botón “Evaluar con IA”: toma las oportunidades OPEN y completa el bloque IA (score, confianza, acción y resumen). Requiere IA configurada.",
++            "Botón “Base de datos”: abre el historial completo (OPEN + cerradas). Sirve para buscar, auditar y filtrar.",
++        ]),
++
++        ("6) Oportunidades: dentro de cada tarjeta (qué tocar y qué esperar)", [
++            "Bloque ‘IA’: si todavía no corriste IA, dice ‘Sin evaluación IA todavía’. Si corrés IA, vas a ver score, confianza, acción y un resumen.",
++            "‘Ver evidencia’: abre datos asociados a la oportunidad (por qué existe). En DEMO es texto de ejemplo; en real puede ser más técnico.",
++            "‘Nota (opcional)’: escribí una justificación simple (por qué aceptás o por qué ignorás). Esto queda guardado en el historial.",
++            "Botón “Aceptar”: cambia el estado a ACCEPTED. La tarjeta desaparece (porque ya no es OPEN). El badge rojo baja.",
++            "Botón “Ignorar”: cambia el estado a IGNORED. La tarjeta desaparece y el badge rojo baja.",
++        ]),
++
++        ("7) Base de datos: cómo usar el historial", [
++            "Entrá a Oportunidades → Base de datos.",
++            "Qué vas a ver: una tabla con todas las oportunidades (abiertas y cerradas), con filtros y búsqueda.",
++            "Cómo buscar: escribí un texto (título, código, etc.) y aplicá filtros por estado (OPEN/ACCEPTED/IGNORED).",
++            "Cómo auditar: abrí una oportunidad para ver su detalle, evidencia y nota asociada.",
++            "Si algo ‘desaparece’ de Oportunidades: no se perdió; se movió al historial al cambiar de estado.",
++        ]),
++
++        ("8) Portafolios: crear uno y dejarlo listo", [
++            "Un portafolio es un contenedor lógico (por ejemplo: ‘Mi Portafolio’, ‘Conservador’, ‘Agresivo’).",
++            "Paso a paso: Portafolios → Crear nuevo → poné nombre → guardar.",
++            "Luego entrá al portafolio: cargá posiciones/movimientos si el sistema lo solicita (según el flujo disponible en tu versión).",
++            "Importante: el botón ‘Generar’ en Oportunidades depende de que el portafolio tenga datos suficientes.",
++        ]),
++
++        ("9) Activos: por qué existe esta pantalla", [
++            "Activos es tu catálogo (lista) de instrumentos/símbolos. Sirve para: (a) organizar el portafolio, (b) elegir un asset al cargar CSV.",
++            "Si en ‘Cargar precios (CSV)’ el combo Asset aparece vacío: te falta crear al menos un activo.",
++            "Paso a paso: Activos → Agregar → completar símbolo/nombre/tipo/moneda → guardar.",
++        ]),
++
++        ("10) Análisis (PRO): qué hace y cuándo se usa", [
++            "Análisis (PRO) arma métricas a partir de históricos de precios que cargás vos.",
++            "Si no cargaste CSV todavía, es normal que la pantalla se vea sin ranking o con pocos datos.",
++            "Ventana (window): a veces vas a ver un parámetro como window=90. Significa que el análisis se hace sobre los últimos 90 días disponibles.",
++        ]),
++
++        ("11) Cargar precios (CSV): guía paso a paso (muy importante)", [
++            "Esta pantalla NO tiene relación con ‘Generar DEMO’. Es parte de Análisis (PRO).",
++            "Caso A — CSV para 1 activo (más simple):",
++            "  A1) Entrá a Análisis (PRO) → Cargar precios (CSV).",
++            "  A2) Elegí el Asset en el combo.",
++            "  A3) Seleccioná un archivo CSV con columnas date,close (o fecha,precio).",
++            "  A4) Tocá ‘Subir y procesar’.",
++            "  A5) Esperá un mensaje verde con el resultado (nuevos/actualizados/omitidos).",
++            "  A6) Volvé a Análisis y verificá que el ranking aparezca.",
++            "Caso B — CSV multi-activo:",
++            "  B1) Subí un CSV con columnas date,symbol,close.",
++            "  B2) El sistema interpreta el símbolo y asigna a cada activo.",
++            "Si algo falla: revisá separador (coma o punto y coma) y formato de fecha.",
++        ]),
++
++        ("12) Simulator (entrenamiento)", [
++            "El Simulator es un modo de prueba/entrenamiento para simular movimientos y ver cómo se reflejan.",
++            "Uso típico: Panel → Simulator → crear simulación → cargar movimientos → avanzar días.",
++        ]),
++
++        ("13) Test mail (solo admin)", [
++            "Si sos admin, vas a ver ‘Test mail’. Sirve para verificar si el envío de emails está bien configurado.",
++            "Si no sos admin, no aparece. No es un error.",
++        ]),
++
++        ("14) Instalar como app (PWA) en iPhone/Android", [
++            "iPhone: abrir en Safari → botón Compartir → ‘Agregar a inicio’.",
++            "Android: abrir en Chrome → menú ⋮ → ‘Agregar a pantalla principal’ o ‘Instalar app’.",
++            "Si ves pantalla blanca: cerrá sesión, borrá datos del sitio y reinstalá el acceso.",
++        ]),
++
++        ("15) Problemas comunes (Troubleshooting)", [
++            "Al presionar un botón no pasa nada: mirá arriba si apareció un mensaje (verde/rojo). Si no, recargá la página.",
++            "‘Error cliente’: suele ser un problema de CSRF o dominio no confiable. Verificá CSRF_TRUSTED_ORIGINS y que navegás por https.",
++            "Logout no funciona: el botón ‘Salir’ funciona por POST (seguridad). Si escribís /logout/ en el navegador, puede dar 405.",
++            "Badge no se actualiza: el sistema refresca cada 30 segundos; también podés recargar.",
++            "Render ‘No open HTTP ports’: el health check debe apuntar a /healthz/.",
++            "La IA no evalúa: falta OPENAI_API_KEY o está mal escrita en Render.",
++        ]),
++
++        ("16) Checklist de Render (variables recomendadas)", [
++            "ALLOWED_HOSTS: incluir invpanel-pro.onrender.com (y tu dominio propio si lo tenés).",
++            "CSRF_TRUSTED_ORIGINS: incluir https://invpanel-pro.onrender.com (y https://tudominio si corresponde).",
++            "OPENAI_API_KEY (opcional): solo si querés IA.",
++            "SECRET_KEY: obligatorio.",
++            "ADMIN_USERNAME/ADMIN_PASSWORD/ADMIN_EMAIL: para el usuario admin inicial.",
+         ]),
+     ]
+ 
+@@ -914,7 +982,7 @@
+     body.spaceAfter = 6
+ 
+     story = [
+-        Paragraph("Manual de Operación — InvPanel PRO", h1),
++        Paragraph("Manual de Operación — InvPanel PRO (Rev 7)", h1),
+         Paragraph(f"Generado: {timezone.now().strftime('%Y-%m-%d %H:%M')}", body),
+         Spacer(1, 12),
+     ]
+diff -ruN work_invpanel6_base/templates/base.html work_invpanel7/templates/base.html
+--- work_invpanel6_base/templates/base.html	2026-02-23 13:37:10.000000000 +0000
++++ work_invpanel7/templates/base.html	2026-02-23 17:00:52.884219932 +0000
+@@ -30,6 +30,7 @@
+     .nav{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+     .nav a{ color:#e5e7eb; font-weight:600; font-size:14px; padding:8px 10px; border-radius:10px; }
+     .nav a.active, .nav a:hover{ background:rgba(255,255,255,.10); }
++    .nav form button:hover{ background:rgba(255,255,255,.10); }
+     .pill{ display:inline-flex; align-items:center; gap:6px; }
+     .badge{ display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 6px; border-radius:999px; background:var(--danger); color:#fff; font-size:12px; font-weight:800; }
+ 
+@@ -68,7 +69,7 @@
+   <div class="inner">
+     <a class="brand" href="/">
+       <span class="logo"></span>
+-      <span class="title">InvPanel PRO</span>
++      <span class="title">InvPanel PRO <span style="font-weight:700; font-size:12px; opacity:.8;">Rev 7</span></span>
+     </a>
+ 
+     <nav class="nav">
+@@ -90,7 +91,12 @@
+           <a href="/alerts/test/" class="{% if request.path|slice:':12' == '/alerts/test' %}active{% endif %}">Test mail</a>
+         {% endif %}
+ 
+-        <a href="/logout/">Salir</a>
++        <form method="post" action="/logout/" style="display:inline; margin:0;">
++          {% csrf_token %}
++          <button type="submit" style="background:none; border:none; padding:8px 10px; border-radius:10px; color:#e5e7eb; font-weight:600; font-size:14px; cursor:pointer;">
++            Salir
++          </button>
++        </form>
+       {% else %}
+         <a href="/login/" class="active">Ingresar</a>
+       {% endif %}
+diff -ruN work_invpanel6_base/templates/core/manual.html work_invpanel7/templates/core/manual.html
+--- work_invpanel6_base/templates/core/manual.html	2026-02-23 13:37:10.000000000 +0000
++++ work_invpanel7/templates/core/manual.html	2026-02-23 17:07:00.472376144 +0000
+@@ -5,8 +5,8 @@
+ <div class="card">
+   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+     <div>
+-      <h2 style="margin:0;">Manual de operación</h2>
+-      <div class="muted">Solo accesible con login.</div>
++      <h2 style="margin:0;">Manual de operación (Rev 7)</h2>
++      <div class="muted">Guía narrada y paso a paso. Solo accesible con login.</div>
+     </div>
+     <a class="btn btn-primary" href="/manual/pdf/">Descargar PDF</a>
+   </div>
+diff -ruN work_invpanel6_base/templates/core/opportunities.html work_invpanel7/templates/core/opportunities.html
+--- work_invpanel6_base/templates/core/opportunities.html	2026-02-23 13:37:10.000000000 +0000
++++ work_invpanel7/templates/core/opportunities.html	2026-02-23 17:01:35.396416312 +0000
+@@ -32,6 +32,28 @@
+       <a class="btn btn-secondary" href="/opportunities/db/">Base de datos</a>
+     </div>
+   </div>
++
++  <details style="margin-top:12px;">
++    <summary style="cursor:pointer; font-weight:900;">Ayuda rápida — qué tocar y qué esperar</summary>
++    <div class="muted" style="margin-top:10px; line-height:1.55;">
++      <p style="margin:0 0 10px;">
++        Esta pantalla es tu “inbox” de oportunidades. Solo muestra las que están en estado <b>OPEN</b> (abiertas).
++        Cuando aceptás o ignorás una oportunidad, <b>desaparece</b> de acá porque deja de estar OPEN.
++      </p>
++
++      <ul style="margin:0; padding-left:18px;">
++        <li style="margin:8px 0;"><b>Generar DEMO</b>: crea 3 oportunidades de prueba (para aprender). Esperá ver un mensaje verde y 3 tarjetas.</li>
++        <li style="margin:8px 0;"><b>Generar</b>: intenta crear oportunidades a partir de tu portafolio. Si tu portafolio está vacío, puede generar 0.</li>
++        <li style="margin:8px 0;"><b>Evaluar con IA</b>: si la IA está configurada, completa el bloque “IA” de cada tarjeta (score, acción, resumen).</li>
++        <li style="margin:8px 0;"><b>Base de datos</b>: muestra el historial completo (OPEN + cerradas). Útil para buscar y auditar decisiones.</li>
++        <li style="margin:8px 0;"><b>Aceptar</b>: cierra como <b>ACCEPTED</b>. <b>Ignorar</b>: cierra como <b>IGNORED</b>. En ambos casos, el badge rojo baja.</li>
++      </ul>
++
++      <p style="margin:10px 0 0;">
++        Si apretás un botón y “no pasa nada”, mirá arriba si apareció una caja verde/roja: eso confirma el resultado.
++      </p>
++    </div>
++  </details>
+ </div>
+ 
+ {% if recs %}
