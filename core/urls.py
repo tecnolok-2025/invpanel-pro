@@ -28,5 +28,6 @@ urlpatterns = [
     path("manual/pdf/", views.manual_pdf, name="manual_pdf"),
 
     path("api/badges/", views.badges_api, name="badges_api"),
+    path("api/reco-diag/", views.reco_diag_api, name="reco_diag_api"),
     path("healthz/", views.healthz, name="healthz"),
 ]

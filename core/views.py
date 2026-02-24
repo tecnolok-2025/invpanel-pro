@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import os
 from datetime import datetime
 from decimal import Decimal
@@ -9,11 +10,25 @@ from io import BytesIO, TextIOWrapper
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import logout
 from django.core.management import call_command
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
+
+logger = logging.getLogger(__name__)
+
+def logout_any(request):
+    """Logout que acepta GET y POST.
+
+    Render/usuarios a veces navegan /logout/ por GET (por historial, links viejos o PWA).
+    Django por defecto responde 405 a GET. Esta vista evita pantallas en blanco/confusión,
+    manteniendo el flujo simple: cerrar sesión y volver a /login/.
+    """
+    logout(request)
+    return redirect("/login/")
+
 from django.db.models import Q
 from django.conf import settings
 
@@ -45,7 +60,7 @@ from .models import (
     Simulation,
     Transaction,
 )
-from .reco_engine import generate_recommendations, _create_reco_safe
+from .reco_engine import generate_recommendations, diagnose_generation, _create_reco_safe
 from .stats_engine import rank_assets
 from .ai_engine import evaluate_recommendation
 
@@ -105,7 +120,8 @@ def _price_snapshot_for_portfolio(portfolio: Portfolio) -> dict:
     )
     snap = {}
     for sym in symbols[:50]:
-        p = AssetPrice.objects.filter(symbol=sym).order_by("-date").first()
+        # AssetPrice referencia Asset por FK (no hay campo symbol directo)
+        p = AssetPrice.objects.filter(asset__symbol=sym).order_by("-date").first()
         if p:
             snap[sym] = {"date": str(p.date), "close": float(p.close)}
     return snap
@@ -155,7 +171,8 @@ def portfolios(request):
 def portfolio_detail(request, portfolio_id: int):
     portfolio = get_object_or_404(Portfolio, id=portfolio_id, owner=request.user)
 
-    tx_qs = Transaction.objects.filter(portfolio=portfolio).order_by("-date", "-id")
+    # Campo correcto: tx_date
+    tx_qs = Transaction.objects.filter(portfolio=portfolio).order_by("-tx_date", "-id")
     tx_form = TransactionForm(request.POST or None)
 
     if request.method == "POST" and tx_form.is_valid():
@@ -533,9 +550,58 @@ def opportunities(request):
         # Generar oportunidades a partir del motor (si hay portafolio)
         if action == "generate":
             p = _get_or_create_default_portfolio(request.user)
-            created = generate_recommendations(p)
-            _audit(request, "reco_generate", {"portfolio_id": p.id, "created": created})
-            messages.success(request, f"Oportunidades generadas: {created}.")
+
+            # Diagnóstico previo (ayuda muchísimo cuando da 0)
+            diag = diagnose_generation(p)
+            logger.info(
+                "Reco generate requested | user=%s portfolio_id=%s tx=%s holdings=%s prices=%s missing=%s open=%s",
+                getattr(request.user, "username", ""),
+                diag.get("portfolio_id"),
+                diag.get("tx_count"),
+                diag.get("holdings_count"),
+                diag.get("prices_available"),
+                diag.get("prices_missing"),
+                diag.get("open_opportunities"),
+            )
+
+            res = generate_recommendations(p)
+            # Compatibilidad: puede ser int (legacy) o un objeto con created/reason
+            created = int(getattr(res, "created", res))
+            reason = str(getattr(res, "reason", "") or "")
+
+            _audit(
+                request,
+                "reco_generate",
+                {"portfolio_id": p.id, "created": created, "reason": reason, "diag": diag},
+            )
+
+            # Guardamos diagnóstico para UI (se muestra en la pantalla de oportunidades)
+            request.session["last_generate_diag"] = {
+                "created": created,
+                "reason": reason,
+                "diag": diag,
+                "ts": timezone.now().isoformat(),
+            }
+
+            if created > 0:
+                messages.success(request, f"Oportunidades generadas: {created}.")
+            else:
+                # Si la app está en modo viejo y reason queda vacío, avisar para diagnóstico.
+                if not reason:
+                    reason = (
+                        "(Diagnóstico) El motor de generación parece estar en modo básico/antiguo. "
+                        "Asegurate de haber desplegado la Rev 10 (mirá el título arriba)."
+                    )
+
+                # Si ya hay OPEN, probablemente evita duplicados
+                if diag.get("open_opportunities"):
+                    reason += f" Ya tenés {diag.get('open_opportunities')} oportunidad(es) OPEN. Revisá 'Base de datos'."
+
+                # Si no hay OPEN y no crea nada, probablemente hubo errores en DB/migraciones
+                if not diag.get("open_opportunities"):
+                    reason += " Si esto se repite, mirá los logs en Render: debería aparecer una línea 'Reco create IntegrityError' o 'Reco create Exception'."
+
+                messages.warning(request, f"Oportunidades generadas: 0. {reason}")
             return redirect("core:opportunities")
 
         # Generar DEMO (sin depender de holdings)
@@ -560,7 +626,7 @@ def opportunities(request):
 
             created = 0
             for code, sev, title, rationale, evidence in demo_defs:
-                _create_reco_safe(
+                _, ok = _create_reco_safe(
                     portfolio=p,
                     code=f"{code}-{p.id}",
                     severity=sev,
@@ -569,7 +635,8 @@ def opportunities(request):
                     evidence=evidence,
                     status=Recommendation.Status.OPEN,
                 )
-                created += 1
+                if ok:
+                    created += 1
 
             _audit(request, "reco_demo_seed", {"portfolio_id": p.id, "created": created})
             messages.success(request, f"Se generaron {created} oportunidades DEMO.")
@@ -639,9 +706,12 @@ def opportunities(request):
         .order_by("-created_at")
     )
 
+    last_generate_diag = request.session.pop("last_generate_diag", None)
+
     return render(request, "core/opportunities.html", {
         "recs": recs,
         "open_count": recs.count(),
+        "last_generate_diag": last_generate_diag,
         "openai_configured": bool(getattr(settings, "OPENAI_API_KEY", "")),
         "ai_governance": bool(getattr(settings, "AI_GOVERNANCE_REQUIRED", True)),
         "ai_min_score": int(getattr(settings, "AI_MIN_SCORE", 70)),
@@ -812,63 +882,116 @@ def run_alerts(request):
 
 
 def _manual_sections():
-    # Manual operativo (orientado a usuario, narrado y paso a paso)
+    # Manual operativo (Rev 10) — pensado para uso real, con procedimientos por botón.
+    # Formato: secciones + bullets (sirve para HTML y PDF).
     return [
-        ("Qué es y para qué sirve", [
-            "InvPanel PRO es un panel web personal para gestionar un portafolio y registrar decisiones sobre oportunidades (recomendaciones).",
-            "Está pensado para usarse desde PC o desde el celular como app (PWA: se instala como ícono en la pantalla de inicio).",
-            "Importante: el sistema no compra/vende en ningún broker. Solo registra información y estados para tu análisis y tu decisión.",
+        ("1) Qué es InvPanel PRO (y qué NO es)", [
+            "InvPanel PRO es un panel web personal para gestionar un portafolio y registrar decisiones sobre ‘Oportunidades’ (recomendaciones).",
+            "Se puede usar desde PC o desde el celular como ‘app’ (PWA: se instala como ícono).",
+            "MUY IMPORTANTE: el sistema NO compra ni vende en ningún broker. No mueve dinero. No toca tus cuentas. Solo registra información y estados.",
+            "Cómo pensarlo: tablero + bitácora (historial) para ordenar y justificar decisiones.",
         ]),
-        ("Cómo entrar y orientarte (primer uso)", [
-            "1) Abrí la URL del sistema y entrá con tu usuario y contraseña.",
-            "2) Mirá el menú superior: vas a ver accesos a Portafolio, Oportunidades, Históricos y Manual.",
-            "3) Si aparece un número rojo (badge) en Oportunidades, significa que hay oportunidades abiertas pendientes (estado OPEN).",
-            "Tip: cuando haces una acción correcta, el sistema muestra un mensaje en pantalla (caja verde o roja).",
+
+        ("2) Cómo entrar y cómo ubicarte (primer uso)", [
+            "Paso 1 — Entrar: abrí la URL del sistema y logueate con tu usuario y contraseña.",
+            "Paso 2 — Menú superior: Panel · Portafolios · Activos · Oportunidades · Análisis (PRO) · Manual.",
+            "Paso 3 — Versión: en el título superior figura ‘Rev 10’. Si ves otro número, no estás en la versión esperada.",
+            "Paso 4 — Mensajes: después de tocar un botón, arriba aparece una caja: verde = OK, roja = error, azul = informativa, naranja = advertencia.",
+            "Paso 5 — Numerito rojo: si aparece en ‘Oportunidades’ (menú), significa que hay oportunidades OPEN (pendientes).",
         ]),
-        ("Oportunidades: qué son", [
-            "Una 'Oportunidad' es una recomendación registrada en el sistema para que la revises y tomes una decisión.",
-            "Cada oportunidad tiene: título, severidad (Alta/Media/Baja), explicación (rationale) y evidencia (datos asociados).",
-            "Estados principales: OPEN (abierta), ACCEPTED (aceptada), IGNORED (ignorada).",
+
+        ("3) Primera prueba guiada (sin datos reales)", [
+            "Objetivo: ver tarjetas, botones, numeritos y flujo completo sin depender de tu portafolio.",
+            "Paso 1: entrá a Oportunidades.",
+            "Paso 2: tocá ‘Generar DEMO’.",
+            "Qué deberías ver: mensaje verde + 3 tarjetas + OPEN=3.",
+            "Paso 3: en una tarjeta, opcionalmente escribí una nota y tocá ‘Aceptar’.",
+            "Qué deberías ver: mensaje verde, la tarjeta desaparece (deja de ser OPEN) y el numerito rojo baja.",
+            "Paso 4: en otra tarjeta tocá ‘Ignorar’.",
+            "Paso 5: tocá ‘Base de datos’ para ver el historial y verificar estados ACCEPTED / IGNORED.",
         ]),
-        ("Oportunidades: botones y qué hace cada uno", [
-            "Generar DEMO: crea 3 oportunidades de prueba para que veas tarjetas, badges y el flujo completo.",
-            "Aceptar: cambia una oportunidad a estado ACCEPTED (ya no cuenta como abierta).",
-            "Ignorar: cambia una oportunidad a estado IGNORED (ya no cuenta como abierta).",
-            "Evaluar con IA: si está configurada la IA, agrega un análisis adicional a las oportunidades abiertas (no es obligatorio).",
+
+        ("4) Pantalla Oportunidades — qué estás viendo", [
+            "Esta pantalla es tu ‘inbox’. Solo muestra oportunidades en estado OPEN.",
+            "‘Abiertas (OPEN)’: cuántas oportunidades te quedan pendientes.",
+            "Bloque IA: si IA está configurada, puede completar score/resumen. Si NO está configurada, el sistema funciona igual.",
         ]),
-        ("Cómo probar el sistema en 2 minutos (paso a paso)", [
-            "1) Entrá a Oportunidades.",
-            "2) Tocá el botón 'Generar DEMO'.",
-            "3) Debe aparecer un mensaje verde diciendo cuántas oportunidades DEMO se generaron.",
-            "4) Deben aparecer 3 tarjetas (Alta/Media/Baja).",
-            "5) Probá 'Aceptar' en una tarjeta: el badge rojo debería bajar.",
-            "6) Probá 'Ignorar' en otra tarjeta: el badge vuelve a bajar.",
-            "Si no aparecen tarjetas después de Generar DEMO, revisá la sección Troubleshooting.",
+
+        ("5) Botones de Oportunidades — procedimiento paso a paso", [
+            "Botón ‘Generar DEMO’ (aprender):",
+            "  1) Tocá ‘Generar DEMO’.",
+            "  2) Esperá que la página recargue sola.",
+            "  3) Confirmá: mensaje verde + tarjetas demo + OPEN aumenta.",
+            "  4) Si no genera DEMO: suele ser porque ya tenías oportunidades OPEN (no duplica).",
+            "Botón ‘Generar’ (motor real):",
+            "  1) Tocá ‘Generar’.",
+            "  2) Esperá recarga y mirá el mensaje.",
+            "  3) Si genera >0: aparecen nuevas tarjetas OPEN.",
+            "  4) Si genera 0: el sistema muestra una explicación. Causas típicas: portafolio vacío, holdings en 0, faltan precios, precios viejos, o ya existían oportunidades OPEN iguales (evita duplicados).",
+            "Botón ‘Diagnóstico’ (cuando algo no cierra):",
+            "  1) Tocá ‘Diagnóstico’.",
+            "  2) Se abre una ventana con datos (tx_count, holdings_count, prices_missing, open_opportunities).",
+            "  3) Interpretación rápida: tx_count=0 → no hay movimientos; prices_missing>0 → faltan precios; open_opportunities>0 → ya hay oportunidades OPEN y por eso ‘Generar’ suele devolver 0.",
+            "Botón ‘Evaluar con IA’ (opcional):",
+            "  1) Solo sirve si IA figura como ‘configurada’.",
+            "  2) Tocá ‘Evaluar con IA’ → recarga → se completa el bloque IA en cada tarjeta.",
+            "Botón ‘Base de datos’ (historial):",
+            "  1) Entrá para ver todo (OPEN + cerradas).",
+            "  2) Usá filtros por estado y buscador por texto.",
         ]),
-        ("Base de datos de Oportunidades (historial)", [
-            "Entrá a Oportunidades → Base de datos para ver todas las oportunidades (abiertas y cerradas).",
-            "Ahí podés filtrar por estado, buscar por texto y abrir una oportunidad para ver el detalle completo.",
-            "Si necesitás volver a abrir una oportunidad, existe la acción 'Reabrir' (pasa a OPEN).",
+
+        ("6) Botones dentro de una tarjeta — qué tocar y qué esperar", [
+            "‘Ver evidencia’: abre los datos que justifican la oportunidad.",
+            "‘Nota (opcional)’: escribí tu criterio. Queda guardado en el historial.",
+            "‘Aceptar’: pasa a ACCEPTED. Desaparece de OPEN. Baja el numerito rojo.",
+            "‘Ignorar’: pasa a IGNORED. Desaparece de OPEN. Baja el numerito rojo.",
         ]),
-        ("Históricos (Análisis PRO)", [
-            "Históricos te permite cargar y ver datos de precios o series históricas para análisis.",
-            "Si cargás un CSV, debería aparecer en el listado y poder consultarse luego.",
-            "Si no ves los datos, verificá el formato del CSV y que el upload haya finalizado.",
+
+        ("7) Cómo funciona el motor ‘Generar’ (reglas simples)", [
+            "El motor ‘Generar’ usa reglas simples y auditables (rápidas, no ‘finanzas complejas’).",
+            "Reglas típicas: concentración (una posición muy grande), exposición por moneda, faltan precios históricos, precios desactualizados, muchas posiciones pequeñas.",
+            "Si apretás ‘Generar’ varias veces: no debería duplicar oportunidades iguales; por eso a veces devuelve 0.",
+            "En Rev 10, cuando ‘Generar’ da 0, el sistema deja un diagnóstico y también escribe líneas útiles en los logs de Render para ver la causa real (por ejemplo, si falló por un tema de base de datos/migraciones).",
         ]),
-        ("IA (opcional)", [
-            "El botón 'Evaluar con IA' se habilita solo si existe la variable de entorno OPENAI_API_KEY.",
-            "Si no está configurada, el sistema funciona igual: podés aceptar/ignorar manualmente.",
+
+        ("8) Portafolios — dejar el portafolio listo", [
+            "Paso 1: Portafolios → Crear nuevo → nombre → Guardar.",
+            "Paso 2: Cargar transacciones BUY/SELL (movimientos).",
+            "Paso 3 (recomendado): Cargar precios históricos (CSV) para calcular porcentajes y concentración.",
         ]),
-        ("Instalar como app (PWA) en iPhone/Android", [
-            "iPhone: abrir en Safari → botón Compartir → 'Agregar a inicio'.",
-            "Android: abrir en Chrome → menú ⋮ → 'Agregar a pantalla principal' o 'Instalar app'.",
-            "Si ves pantalla blanca en la PWA: borrá datos del sitio y reinstalá el acceso.",
+
+        ("9) Activos — catálogo de símbolos", [
+            "Activos es tu catálogo de instrumentos/símbolos (para portafolio y para cargar CSV).",
+            "Si al cargar precios el combo Asset está vacío: creá al menos un Activo.",
+            "Paso a paso: Activos → Agregar → símbolo/nombre/tipo/moneda → Guardar.",
         ]),
-        ("Troubleshooting (problemas comunes)", [
-            "Al presionar un botón no pasa nada / aparece 'Error cliente': suele ser un problema de CSRF o dominio no confiable. Revisá CSRF_TRUSTED_ORIGINS en Render.",
-            "Mensaje de Render 'No open HTTP ports': configurar Health Check Path en /healthz/.",
-            "No aparece el badge o no se actualiza: recargá la página; el badge se refresca cada 30 segundos automáticamente.",
-            "La IA no evalúa: falta OPENAI_API_KEY o está mal escrita en variables de entorno.",
+
+        ("10) Análisis (PRO) y carga de precios (CSV)", [
+            "Análisis (PRO) calcula métricas usando históricos de precios que cargás por CSV.",
+            "Caso simple (1 símbolo): Análisis (PRO) → Cargar precios → elegir Asset → subir CSV date,close → procesar.",
+            "Caso multi-símbolo: CSV date,symbol,close.",
+        ]),
+
+        ("11) Ícono tipo app (PWA) y numeritos rojos en el ícono", [
+            "El numerito rojo dentro de la app (menú Oportunidades) es el indicador confiable.",
+            "El numerito en el ÍCONO de la app depende del sistema/navegador (API de ‘badges’). Suele funcionar mejor en Android/Chrome y en escritorio con Chromium. En iPhone (Safari/PWA) puede NO aparecer aunque todo esté bien.",
+            "Si no ves el numerito en el ícono: no significa fallo. Usá el contador de ‘Oportunidades’ en el menú y/o el badge dentro de la interfaz.",
+        ]),
+
+        ("12) Problemas comunes (Troubleshooting)", [
+            "Pantalla en blanco: suele ser cache del Service Worker. Solución: borrar datos del sitio (cache/storage) y recargar; o reinstalar la PWA.",
+            "‘Error cliente’ al tocar botones: suele ser CSRF / dominios. Revisá ALLOWED_HOSTS y CSRF_TRUSTED_ORIGINS en Render.",
+            "‘Generar’ devuelve 0: mirá el mensaje. Luego tocá ‘Diagnóstico’ para ver números concretos (tx_count, holdings_count, prices_missing, open_opportunities).",
+            "Si sigue sin cerrar: revisá logs en Render. En Rev 10 deberían aparecer mensajes ‘Reco create IntegrityError’ o ‘Reco create Exception’ si algo impide crear oportunidades.",
+            "Render ‘No open HTTP ports’: health check en /healthz/.",
+        ]),
+
+        ("13) Checklist de Render (variables recomendadas)", [
+            "ALLOWED_HOSTS: invpanel-pro.onrender.com (y tu dominio propio si lo tenés).",
+            "CSRF_TRUSTED_ORIGINS: https://invpanel-pro.onrender.com (y https://tudominio si corresponde).",
+            "OPENAI_API_KEY (opcional): solo si querés IA.",
+            "SECRET_KEY: obligatorio.",
+            "ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_EMAIL: para el usuario admin inicial.",
         ]),
     ]
 
@@ -914,7 +1037,7 @@ def manual_pdf(request):
     body.spaceAfter = 6
 
     story = [
-        Paragraph("Manual de Operación — InvPanel PRO", h1),
+        Paragraph("Manual de Operación — InvPanel PRO (Rev 10)", h1),
         Paragraph(f"Generado: {timezone.now().strftime('%Y-%m-%d %H:%M')}", body),
         Spacer(1, 12),
     ]
@@ -964,3 +1087,13 @@ def badges_api(request):
     except Exception:
         open_count = 0
     return JsonResponse({"ok": True, "opps_open": open_count, "app_badge": open_count})
+
+
+@login_required
+@require_http_methods(["GET"])
+def reco_diag_api(request):
+    """Diagnóstico rápido del botón 'Generar' en Oportunidades."""
+    portfolio, _ = _get_or_create_default_portfolio(request.user)
+    diag = diagnose_generation(portfolio)
+    diag["ok"] = True
+    return JsonResponse(diag)

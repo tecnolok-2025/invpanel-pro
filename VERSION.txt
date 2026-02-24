@@ -1,2 +1,1 @@
-InvPanel Pro v11.2 - Render-friendly (ai_action default HOLD)
-Generated: 2026-02-22
+v11.10-full (diagnóstico del botón Generar + logs claros + manual Rev 10 + mejoras de mensajes)

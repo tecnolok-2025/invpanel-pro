@@ -30,6 +30,7 @@
     .nav{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .nav a{ color:#e5e7eb; font-weight:600; font-size:14px; padding:8px 10px; border-radius:10px; }
     .nav a.active, .nav a:hover{ background:rgba(255,255,255,.10); }
+    .nav form button:hover{ background:rgba(255,255,255,.10); }
     .pill{ display:inline-flex; align-items:center; gap:6px; }
     .badge{ display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 6px; border-radius:999px; background:var(--danger); color:#fff; font-size:12px; font-weight:800; }
 
@@ -46,6 +47,8 @@
     .flash{ padding:10px 12px; border-radius:12px; margin:10px 0; border:1px solid var(--border); background:#fff; }
     .flash.success{ border-color:rgba(16,185,129,.35); background:rgba(16,185,129,.10); }
     .flash.error{ border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.08); }
+    .flash.info{ border-color:rgba(59,130,246,.35); background:rgba(59,130,246,.10); }
+    .flash.warning{ border-color:rgba(245,158,11,.40); background:rgba(245,158,11,.12); }
 
     /* Bottom nav (mobile) */
     .bottomnav{ position:fixed; bottom:0; left:0; right:0; z-index:10; background:rgba(6,20,39,.92); border-top:1px solid rgba(255,255,255,.10);
@@ -68,7 +71,7 @@
   <div class="inner">
     <a class="brand" href="/">
       <span class="logo"></span>
-      <span class="title">InvPanel PRO</span>
+      <span class="title">InvPanel PRO <span style="font-weight:700; font-size:12px; opacity:.8;">Rev 10</span></span>
     </a>
 
     <nav class="nav">
@@ -90,7 +93,12 @@
           <a href="/alerts/test/" class="{% if request.path|slice:':12' == '/alerts/test' %}active{% endif %}">Test mail</a>
         {% endif %}
 
-        <a href="/logout/">Salir</a>
+        <form method="post" action="/logout/" style="display:inline; margin:0;">
+          {% csrf_token %}
+          <button type="submit" style="background:none; border:none; padding:8px 10px; border-radius:10px; color:#e5e7eb; font-weight:600; font-size:14px; cursor:pointer;">
+            Salir
+          </button>
+        </form>
       {% else %}
         <a href="/login/" class="active">Ingresar</a>
       {% endif %}
@@ -128,7 +136,7 @@
   (function(){
     try {
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(function(){});
+        navigator.serviceWorker.register('/sw.js').then(function(reg){ try{ reg.update(); }catch(e){} }).catch(function(){});
       }
     } catch (e) { /* ignore */ }
   })();
@@ -164,6 +172,13 @@
           el.textContent = String(n);
           el.style.display = n > 0 ? "inline-block" : "none";
         });
+
+        // (UX) También reflejar el contador en el título de la pestaña (útil en desktop)
+        try {
+          const baseTitle = "InvPanel PRO";
+          if (n > 0) document.title = "(" + n + ") " + baseTitle;
+          else document.title = baseTitle;
+        } catch (e) {}
 
         // App Badge API (solo en navegadores/PWA que lo soporten)
         if ("setAppBadge" in navigator) {

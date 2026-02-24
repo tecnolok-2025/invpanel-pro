@@ -1,8 +1,8 @@
-/* InvPanel PRO - Service Worker (v9)
+/* InvPanel PRO - Service Worker (v12)
    Cache básico para assets estáticos. Evita fallos si una URL no existe.
 */
 
-const CACHE_NAME = "invpanel-static-v9";
+const CACHE_NAME = "invpanel-static-v12";
 const PRECACHE_URLS = [
   "/static/css/base.css",
   "/static/icons/icon-192.png",
