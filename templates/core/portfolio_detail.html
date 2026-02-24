@@ -28,6 +28,41 @@
   </div>
 
   <div class="card col">
+    <h3>Pendientes (PLANES)</h3>
+    <p class="muted">
+      Los PLANES son tareas para ejecutar <strong>manual</strong> en tu broker.
+      Se crean al tocar <strong>"Enviar al portafolio"</strong> desde una oportunidad.
+    </p>
+
+    {% if plans %}
+      <ul>
+        {% for p in plans %}
+          <li style="margin-bottom:10px;">
+            <div class="muted" style="font-size:12px;">{{ p.created_at|date:"Y-m-d H:i" }}</div>
+            <div style="white-space:pre-wrap;">{{ p.plan_text }}</div>
+            <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
+              <form method="post" style="margin:0;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="plan_done" />
+                <input type="hidden" name="plan_id" value="{{ p.id }}" />
+                <button class="secondary" type="submit">Marcar HECHO</button>
+              </form>
+              <form method="post" style="margin:0;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="plan_cancel" />
+                <input type="hidden" name="plan_id" value="{{ p.id }}" />
+                <button class="secondary" type="submit">Cancelar</button>
+              </form>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No tenés PLANES pendientes todavía.</p>
+    {% endif %}
+
+    <hr style="margin:14px 0;border:0;border-top:1px solid #e5e7eb">
+
     <h3>Agregar movimiento</h3>
     <form method="post">
       {% csrf_token %}

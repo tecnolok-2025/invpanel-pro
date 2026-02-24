@@ -97,6 +97,49 @@ class Recommendation(TimeStamped):
     ai_evaluated_at = models.DateTimeField(null=True, blank=True)
 
 
+class PlannedMove(TimeStamped):
+    """Plan de acción sugerido para ejecutar *manual* en el broker.
+
+    IMPORTANTE:
+    - No ejecuta compras/ventas.
+    - Es una "lista de pendientes" para que el usuario lleve el control.
+
+    Nace típicamente desde una oportunidad (Recommendation) al tocar
+    "Enviar al portafolio".
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pendiente"
+        DONE = "DONE", "Hecho"
+        CANCELED = "CANCELED", "Cancelado"
+
+    portfolio = models.ForeignKey(Portfolio, on_delete=models.CASCADE, related_name="plans")
+    recommendation = models.ForeignKey(
+        Recommendation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="plans",
+        help_text="Oportunidad que originó este plan (si aplica).",
+    )
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+
+    # Texto narrado del plan (lo que el usuario debe hacer en su broker)
+    plan_text = models.TextField()
+
+    # Datos estructurados opcionales para futuras versiones (BUY/SELL, ticker, etc.)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        base = f"PLAN {self.id} {self.status}"
+        if self.recommendation_id:
+            base += f" (rec {self.recommendation_id})"
+        return base
+
+
 class Simulation(TimeStamped):
     PRESETS = [("CONS","Conservador"),("BAL","Balanceado"),("AGR","Agresivo")]
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

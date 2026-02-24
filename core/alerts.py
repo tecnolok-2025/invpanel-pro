@@ -22,7 +22,7 @@ def _is_email_configured() -> bool:
     return bool(os.getenv("EMAIL_HOST") and os.getenv("EMAIL_HOST_USER") and os.getenv("EMAIL_HOST_PASSWORD"))
 
 
-def send_daily_alert(base_url: str) -> tuple[bool, str]:
+def send_daily_alert(base_url: str, dry_run: bool = False) -> tuple[bool, str]:
     """Envía un email con ranking y procedimiento.
 
     Returns: (ok, message)
@@ -57,6 +57,10 @@ def send_daily_alert(base_url: str) -> tuple[bool, str]:
 
     text_body = render_to_string("core/email_alert.txt", ctx)
     html_body = render_to_string("core/email_alert.html", ctx)
+
+    if dry_run:
+        # No envía email: solo valida y devuelve el cuerpo armado.
+        return True, "DRY RUN OK (no se envió email).\n\n" + text_body
 
     msg = EmailMultiAlternatives(subject=subject, body=text_body, from_email=from_email, to=[to_email])
     msg.attach_alternative(html_body, "text/html")

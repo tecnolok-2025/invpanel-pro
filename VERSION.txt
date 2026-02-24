@@ -1,1 +1,1 @@
-v11.11-full (mejora de contraste en banners/mensajes + actualización de rótulos a Rev 11)
+v11.12-full (PLANES pendientes en Portafolios + "Enviar al portafolio" crea PLAN + fix test_alerts dry_run)

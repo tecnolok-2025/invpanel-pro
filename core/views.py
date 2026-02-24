@@ -54,6 +54,7 @@ from .models import (
     AssetPrice,
     AuditEvent,
     Portfolio,
+    PlannedMove,
     Recommendation,
     SimPosition,
     SimTrade,
@@ -126,6 +127,41 @@ def _price_snapshot_for_portfolio(portfolio: Portfolio) -> dict:
             snap[sym] = {"date": str(p.date), "close": float(p.close)}
     return snap
 
+
+def _create_plan_for_reco(reco: Recommendation) -> tuple[PlannedMove, bool]:
+    """Crea un PLAN (pendiente) en el portafolio a partir de una oportunidad.
+
+    Devuelve: (plan, created)
+    """
+    existing = PlannedMove.objects.filter(
+        portfolio=reco.portfolio,
+        recommendation=reco,
+        status=PlannedMove.Status.PENDING,
+    ).first()
+    if existing:
+        return existing, False
+
+    plan_text = (
+        "PLAN: Revisar esta oportunidad → ejecutar manualmente en tu broker.\n\n"
+        f"Oportunidad: {reco.title}\n"
+        f"Código: {reco.code}\n"
+        f"Severidad: {reco.severity}\n"
+        f"Motivo: {reco.rationale}\n\n"
+        "Pasos sugeridos:\n"
+        "1) Abrí tu broker (Santander / Comafi / etc.).\n"
+        "2) Verificá tu posición y el riesgo asociado.\n"
+        "3) Si corresponde, ejecutá el ajuste (compra/venta) manualmente.\n"
+        "4) Volvé a InvPanel y registrá el movimiento real en ‘Portafolios → Agregar movimiento’."
+    )
+
+    plan = PlannedMove.objects.create(
+        portfolio=reco.portfolio,
+        recommendation=reco,
+        plan_text=plan_text,
+        payload={"source": "recommendation", "reco_id": reco.id, "reco_code": reco.code},
+    )
+    return plan, True
+
 def _get_or_create_default_portfolio(user) -> Portfolio:
     p = Portfolio.objects.filter(owner=user).order_by("id").first()
     if p:
@@ -173,8 +209,26 @@ def portfolio_detail(request, portfolio_id: int):
 
     # Campo correcto: tx_date
     tx_qs = Transaction.objects.filter(portfolio=portfolio).order_by("-tx_date", "-id")
-    tx_form = TransactionForm(request.POST or None)
 
+    # Acciones POST: (1) crear transacción, (2) marcar PLAN como hecho/cancelado
+    action = (request.POST.get("action") or "").strip().lower() if request.method == "POST" else ""
+
+    if request.method == "POST" and action in {"plan_done", "plan_cancel"}:
+        plan_id = int(request.POST.get("plan_id") or 0)
+        plan = get_object_or_404(PlannedMove, id=plan_id, portfolio=portfolio)
+        if action == "plan_done":
+            plan.status = PlannedMove.Status.DONE
+            plan.save(update_fields=["status", "updated_at"])
+            _audit(request, "plan_done", {"portfolio_id": portfolio.id, "plan_id": plan.id})
+            messages.success(request, "Plan marcado como HECHO.")
+        else:
+            plan.status = PlannedMove.Status.CANCELED
+            plan.save(update_fields=["status", "updated_at"])
+            _audit(request, "plan_cancel", {"portfolio_id": portfolio.id, "plan_id": plan.id})
+            messages.info(request, "Plan cancelado.")
+        return redirect("core:portfolio_detail", portfolio_id=portfolio.id)
+
+    tx_form = TransactionForm(request.POST or None)
     if request.method == "POST" and tx_form.is_valid():
         tx = tx_form.save(commit=False)
         tx.portfolio = portfolio
@@ -185,14 +239,44 @@ def portfolio_detail(request, portfolio_id: int):
 
     recs = Recommendation.objects.filter(portfolio=portfolio).order_by("-created_at")[:50]
 
+    # PLANES pendientes (recomendado): lista de tareas para ejecutar manualmente en el broker.
+    plans = PlannedMove.objects.filter(portfolio=portfolio, status=PlannedMove.Status.PENDING).order_by("-created_at")
+
+    # Snapshot simple (para que el usuario vea algo aunque no haya precios cargados)
+    positions = {}
+    for t in tx_qs[:500]:
+        sym = getattr(t.asset, "symbol", "").strip().upper()
+        if not sym:
+            continue
+        qty = float(t.quantity or 0)
+        if t.tx_type == "BUY":
+            positions[sym] = positions.get(sym, 0.0) + qty
+        elif t.tx_type == "SELL":
+            positions[sym] = positions.get(sym, 0.0) - qty
+
+    values = {}
+    total = 0.0
+    for sym, qty in positions.items():
+        last = AssetPrice.objects.filter(asset__symbol=sym).order_by("-date").values_list("close", flat=True).first()
+        if last is None:
+            continue
+        val = float(last) * float(qty)
+        values[sym] = val
+        total += val
+    weights = {sym: (val / total) for sym, val in values.items()} if total > 0 else {}
+
+    snap = {"total": total, "weights": weights}
+
     return render(
         request,
         "core/portfolio_detail.html",
         {
             "portfolio": portfolio,
-            "tx": tx_qs,
-            "tx_form": tx_form,
+            "txs": tx_qs,
+            "form": tx_form,
             "recs": recs,
+            "plans": plans,
+            "snap": snap,
         },
     )
 
@@ -590,7 +674,7 @@ def opportunities(request):
                 if not reason:
                     reason = (
                         "(Diagnóstico) El motor de generación parece estar en modo básico/antiguo. "
-                        "Asegurate de haber desplegado la Rev 11 (mirá el título arriba)."
+                        "Asegurate de haber desplegado la Rev 12 (mirá el título arriba)."
                     )
 
                 # Si ya hay OPEN, probablemente evita duplicados
@@ -688,7 +772,11 @@ def opportunities(request):
                     rec.decision_note = note[:240]
                 rec.save(update_fields=["status", "decision_note", "updated_at"])
                 _audit(request, "reco_accept", {"rec_id": rec.id})
-                messages.success(request, "Oportunidad marcada como ACEPTADA.")
+                plan, created = _create_plan_for_reco(rec)
+                if created:
+                    messages.success(request, "Oportunidad ACEPTADA. Se creó un PLAN pendiente en Portafolios.")
+                else:
+                    messages.success(request, "Oportunidad ACEPTADA. (El PLAN pendiente ya existía).")
 
             elif action in ("ignore", "dismiss"):
                 rec.status = Recommendation.Status.IGNORED
@@ -788,7 +876,11 @@ def opportunities_db(request):
                 if note:
                     rec.decision_note = note[:240]
                 rec.save(update_fields=["status","decision_note","updated_at"])
-                messages.success(request, "Enviada al portafolio (ACEPTADA).")
+                plan, created = _create_plan_for_reco(rec)
+                if created:
+                    messages.success(request, "Enviada al portafolio: ACEPTADA + PLAN pendiente creado.")
+                else:
+                    messages.success(request, "Enviada al portafolio: ACEPTADA. (El PLAN pendiente ya existía).")
 
             elif action == "ignore":
                 rec.status = Recommendation.Status.IGNORED
@@ -858,7 +950,8 @@ def alerts_inbox(request):
 def test_alerts(request):
     """Envía un email de prueba al staff, si el sistema de correo está configurado."""
     try:
-        send_daily_alert(dry_run=True)
+        base_url = request.build_absolute_uri("/").rstrip("/")
+        send_daily_alert(base_url=base_url, dry_run=True)
         messages.success(request, "Test OK: se ejecutó el envío (modo dry_run).")
     except Exception as e:
         messages.error(request, f"Error en test_alerts: {e}")
@@ -870,7 +963,8 @@ def test_alerts(request):
 def run_alerts(request):
     """Corre el comando de envío de alertas (real)."""
     try:
-        send_daily_alert(dry_run=False)
+        base_url = request.build_absolute_uri("/").rstrip("/")
+        send_daily_alert(base_url=base_url, dry_run=False)
         messages.success(request, "Alertas ejecutadas.")
     except Exception as e:
         messages.error(request, f"Error en run_alerts: {e}")
@@ -882,7 +976,7 @@ def run_alerts(request):
 
 
 def _manual_sections():
-    # Manual operativo (Rev 11) — pensado para uso real, con procedimientos por botón.
+    # Manual operativo (Rev 12) — pensado para uso real, con procedimientos por botón.
     # Formato: secciones + bullets (sirve para HTML y PDF).
     return [
         ("1) Qué es InvPanel PRO (y qué NO es)", [
@@ -895,7 +989,7 @@ def _manual_sections():
         ("2) Cómo entrar y cómo ubicarte (primer uso)", [
             "Paso 1 — Entrar: abrí la URL del sistema y logueate con tu usuario y contraseña.",
             "Paso 2 — Menú superior: Panel · Portafolios · Activos · Oportunidades · Análisis (PRO) · Manual.",
-            "Paso 3 — Versión: en el título superior figura ‘Rev 11’. Si ves otro número, no estás en la versión esperada.",
+            "Paso 3 — Versión: en el título superior figura ‘Rev 12’. Si ves otro número, no estás en la versión esperada.",
             "Paso 4 — Mensajes: después de tocar un botón, arriba aparece una caja: verde = OK, roja = error, azul = informativa, naranja = advertencia.",
             "Paso 5 — Numerito rojo: si aparece en ‘Oportunidades’ (menú), significa que hay oportunidades OPEN (pendientes).",
         ]),
@@ -938,6 +1032,14 @@ def _manual_sections():
             "Botón ‘Base de datos’ (historial):",
             "  1) Entrá para ver todo (OPEN + cerradas).",
             "  2) Usá filtros por estado y buscador por texto.",
+            "  3) El botón ‘Enviar al portafolio (crear PLAN)’ crea un pendiente dentro del Portafolio (NO compra/vende).",
+        ]),
+
+        ("6.5) PLANES (pendientes) — qué son y dónde aparecen", [
+            "Un PLAN es una tarea sugerida para ejecutar manualmente en tu broker (no se automatiza).",
+            "Se crea cuando aceptás una oportunidad o cuando tocás ‘Enviar al portafolio (crear PLAN)’ en Base de datos.",
+            "Dónde lo ves: Portafolios → tu portafolio → sección ‘Pendientes (PLANES)’.",
+            "Qué hacer: marcá HECHO cuando ya lo ejecutaste en tu broker; luego registrá el movimiento real en ‘Agregar movimiento’.",
         ]),
 
         ("6) Botones dentro de una tarjeta — qué tocar y qué esperar", [
@@ -951,7 +1053,13 @@ def _manual_sections():
             "El motor ‘Generar’ usa reglas simples y auditables (rápidas, no ‘finanzas complejas’).",
             "Reglas típicas: concentración (una posición muy grande), exposición por moneda, faltan precios históricos, precios desactualizados, muchas posiciones pequeñas.",
             "Si apretás ‘Generar’ varias veces: no debería duplicar oportunidades iguales; por eso a veces devuelve 0.",
-            "En Rev 11, cuando ‘Generar’ da 0, el sistema deja un diagnóstico y también escribe líneas útiles en los logs de Render para ver la causa real (por ejemplo, si falló por un tema de base de datos/migraciones).",
+            "En Rev 12, cuando ‘Generar’ da 0, el sistema deja un diagnóstico y también escribe líneas útiles en los logs de Render para ver la causa real (por ejemplo, si falló por un tema de base de datos/migraciones).",
+        ]),
+
+        ("7.1) Qué es el código SETUP-EMPTY-1", [
+            "Es un ID interno de regla del motor (‘setup’) que detecta que el portafolio está vacío (sin movimientos).",
+            "No es un fondo ni un instrumento real: es una ‘alerta’ para decirte qué falta para que el motor pueda analizar.",
+            "Cuando cargues activos y transacciones reales, estas oportunidades de ‘setup’ dejan de aparecer.",
         ]),
 
         ("8) Portafolios — dejar el portafolio listo", [
@@ -982,7 +1090,7 @@ def _manual_sections():
             "Pantalla en blanco: suele ser cache del Service Worker. Solución: borrar datos del sitio (cache/storage) y recargar; o reinstalar la PWA.",
             "‘Error cliente’ al tocar botones: suele ser CSRF / dominios. Revisá ALLOWED_HOSTS y CSRF_TRUSTED_ORIGINS en Render.",
             "‘Generar’ devuelve 0: mirá el mensaje. Luego tocá ‘Diagnóstico’ para ver números concretos (tx_count, holdings_count, prices_missing, open_opportunities).",
-            "Si sigue sin cerrar: revisá logs en Render. En Rev 11 deberían aparecer mensajes ‘Reco create IntegrityError’ o ‘Reco create Exception’ si algo impide crear oportunidades.",
+            "Si sigue sin cerrar: revisá logs en Render. En Rev 12 deberían aparecer mensajes ‘Reco create IntegrityError’ o ‘Reco create Exception’ si algo impide crear oportunidades.",
             "Render ‘No open HTTP ports’: health check en /healthz/.",
         ]),
 
@@ -1037,7 +1145,7 @@ def manual_pdf(request):
     body.spaceAfter = 6
 
     story = [
-        Paragraph("Manual de Operación — InvPanel PRO (Rev 11)", h1),
+        Paragraph("Manual de Operación — InvPanel PRO (Rev 12)", h1),
         Paragraph(f"Generado: {timezone.now().strftime('%Y-%m-%d %H:%M')}", body),
         Spacer(1, 12),
     ]
