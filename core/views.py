@@ -590,7 +590,7 @@ def opportunities(request):
                 if not reason:
                     reason = (
                         "(Diagnóstico) El motor de generación parece estar en modo básico/antiguo. "
-                        "Asegurate de haber desplegado la Rev 10 (mirá el título arriba)."
+                        "Asegurate de haber desplegado la Rev 11 (mirá el título arriba)."
                     )
 
                 # Si ya hay OPEN, probablemente evita duplicados
@@ -882,7 +882,7 @@ def run_alerts(request):
 
 
 def _manual_sections():
-    # Manual operativo (Rev 10) — pensado para uso real, con procedimientos por botón.
+    # Manual operativo (Rev 11) — pensado para uso real, con procedimientos por botón.
     # Formato: secciones + bullets (sirve para HTML y PDF).
     return [
         ("1) Qué es InvPanel PRO (y qué NO es)", [
@@ -895,7 +895,7 @@ def _manual_sections():
         ("2) Cómo entrar y cómo ubicarte (primer uso)", [
             "Paso 1 — Entrar: abrí la URL del sistema y logueate con tu usuario y contraseña.",
             "Paso 2 — Menú superior: Panel · Portafolios · Activos · Oportunidades · Análisis (PRO) · Manual.",
-            "Paso 3 — Versión: en el título superior figura ‘Rev 10’. Si ves otro número, no estás en la versión esperada.",
+            "Paso 3 — Versión: en el título superior figura ‘Rev 11’. Si ves otro número, no estás en la versión esperada.",
             "Paso 4 — Mensajes: después de tocar un botón, arriba aparece una caja: verde = OK, roja = error, azul = informativa, naranja = advertencia.",
             "Paso 5 — Numerito rojo: si aparece en ‘Oportunidades’ (menú), significa que hay oportunidades OPEN (pendientes).",
         ]),
@@ -951,7 +951,7 @@ def _manual_sections():
             "El motor ‘Generar’ usa reglas simples y auditables (rápidas, no ‘finanzas complejas’).",
             "Reglas típicas: concentración (una posición muy grande), exposición por moneda, faltan precios históricos, precios desactualizados, muchas posiciones pequeñas.",
             "Si apretás ‘Generar’ varias veces: no debería duplicar oportunidades iguales; por eso a veces devuelve 0.",
-            "En Rev 10, cuando ‘Generar’ da 0, el sistema deja un diagnóstico y también escribe líneas útiles en los logs de Render para ver la causa real (por ejemplo, si falló por un tema de base de datos/migraciones).",
+            "En Rev 11, cuando ‘Generar’ da 0, el sistema deja un diagnóstico y también escribe líneas útiles en los logs de Render para ver la causa real (por ejemplo, si falló por un tema de base de datos/migraciones).",
         ]),
 
         ("8) Portafolios — dejar el portafolio listo", [
@@ -982,7 +982,7 @@ def _manual_sections():
             "Pantalla en blanco: suele ser cache del Service Worker. Solución: borrar datos del sitio (cache/storage) y recargar; o reinstalar la PWA.",
             "‘Error cliente’ al tocar botones: suele ser CSRF / dominios. Revisá ALLOWED_HOSTS y CSRF_TRUSTED_ORIGINS en Render.",
             "‘Generar’ devuelve 0: mirá el mensaje. Luego tocá ‘Diagnóstico’ para ver números concretos (tx_count, holdings_count, prices_missing, open_opportunities).",
-            "Si sigue sin cerrar: revisá logs en Render. En Rev 10 deberían aparecer mensajes ‘Reco create IntegrityError’ o ‘Reco create Exception’ si algo impide crear oportunidades.",
+            "Si sigue sin cerrar: revisá logs en Render. En Rev 11 deberían aparecer mensajes ‘Reco create IntegrityError’ o ‘Reco create Exception’ si algo impide crear oportunidades.",
             "Render ‘No open HTTP ports’: health check en /healthz/.",
         ]),
 
@@ -1037,7 +1037,7 @@ def manual_pdf(request):
     body.spaceAfter = 6
 
     story = [
-        Paragraph("Manual de Operación — InvPanel PRO (Rev 10)", h1),
+        Paragraph("Manual de Operación — InvPanel PRO (Rev 11)", h1),
         Paragraph(f"Generado: {timezone.now().strftime('%Y-%m-%d %H:%M')}", body),
         Spacer(1, 12),
     ]

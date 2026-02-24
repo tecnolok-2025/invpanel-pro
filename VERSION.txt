@@ -1,1 +1,1 @@
-v11.10-full (diagnóstico del botón Generar + logs claros + manual Rev 10 + mejoras de mensajes)
+v11.11-full (mejora de contraste en banners/mensajes + actualización de rótulos a Rev 11)
